@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StockAI — Admin Panel</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Noto+Sans+Thai:wght@300;400;600;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#080c10;--surface:#0d1117;--surface2:#161b22;--border:#21262d;--accent:#00d4aa;--gold:#f7c948;--red:#ff4d6d;--green:#00d4aa;--blue:#58a6ff;--text:#e6edf3;--text2:#8b949e;--text3:#484f58;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'Noto Sans Thai',sans-serif;min-height:100vh;}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(0,212,170,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,170,0.025) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0;}
+.auth-screen{position:fixed;inset:0;z-index:1000;background:var(--bg);display:flex;align-items:center;justify-content:center;}
+.auth-screen.hidden{display:none;}
+.auth-box{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:36px;width:min(400px,95vw);}
+.auth-logo{font-family:'Orbitron',monospace;font-size:1.4rem;font-weight:900;color:var(--red);text-align:center;margin-bottom:6px;}
+.auth-sub{text-align:center;color:var(--text2);font-size:0.8rem;margin-bottom:24px;}
+.fg{display:flex;flex-direction:column;gap:5px;margin-bottom:14px;}
+.fg label{font-size:0.7rem;color:var(--text2);}
+.fg input{background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Space Mono',monospace;font-size:0.82rem;padding:10px 12px;outline:none;width:100%;}
+.fg input:focus{border-color:var(--accent);}
+.btn{background:var(--accent);color:#000;border:none;padding:8px 16px;border-radius:6px;font-family:'Noto Sans Thai',sans-serif;font-size:0.8rem;font-weight:700;cursor:pointer;transition:all 0.2s;width:100%;}
+.btn:hover{filter:brightness(1.1);}
+.btn-sm{padding:5px 12px;font-size:0.72rem;width:auto;}
+.btn-danger{background:var(--red);color:#fff;}
+.btn-outline{background:transparent;color:var(--accent);border:1px solid var(--accent);}
+.btn-gold{background:var(--gold);color:#000;}
+header{position:sticky;top:0;z-index:100;background:rgba(8,12,16,0.95);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;}
+.logo{font-family:'Orbitron',monospace;font-weight:900;font-size:1rem;letter-spacing:2px;color:var(--red);}
+.logo span{color:var(--gold);}
+main{position:relative;z-index:1;max-width:1200px;margin:0 auto;padding:24px 20px;}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:28px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px;position:relative;overflow:hidden;}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent);}
+.stat-card.red::before{background:var(--red);}
+.stat-card.gold::before{background:var(--gold);}
+.stat-label{font-size:0.7rem;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;}
+.stat-value{font-family:'Space Mono',monospace;font-size:1.6rem;font-weight:700;}
+.section-title{font-family:'Orbitron',monospace;font-size:0.75rem;letter-spacing:3px;color:var(--text2);text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:10px;}
+.section-title::after{content:'';flex:1;height:1px;background:var(--border);}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:24px;}
+.panel-header{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--surface2);}
+.panel-header h3{font-family:'Space Mono',monospace;font-size:0.85rem;}
+table{width:100%;border-collapse:collapse;}
+th{font-family:'Space Mono',monospace;font-size:0.62rem;color:var(--text3);text-transform:uppercase;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);background:var(--surface2);}
+td{padding:12px 14px;font-size:0.8rem;border-bottom:1px solid rgba(33,38,45,0.5);color:var(--text);}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:rgba(0,212,170,0.03);}
+.status-badge{font-size:0.62rem;padding:2px 8px;border-radius:10px;font-family:'Space Mono',monospace;font-weight:700;}
+.status-pending{background:rgba(247,201,72,0.2);color:var(--gold);border:1px solid rgba(247,201,72,0.3);}
+.status-approved{background:rgba(0,212,170,0.2);color:var(--green);border:1px solid rgba(0,212,170,0.3);}
+.status-rejected{background:rgba(255,77,109,0.2);color:var(--red);border:1px solid rgba(255,77,109,0.3);}
+.plan-free{background:rgba(139,148,158,0.2);color:var(--text2);}
+.plan-premium{background:rgba(247,201,72,0.2);color:var(--gold);}
+.action-btns{display:flex;gap:6px;}
+.toast{position:fixed;bottom:24px;right:24px;z-index:999;background:var(--surface2);border:1px solid var(--accent);border-radius:8px;padding:11px 18px;font-size:0.8rem;color:var(--text);transform:translateY(100px);opacity:0;transition:all 0.3s;max-width:320px;}
+.toast.show{transform:translateY(0);opacity:1;}
+.toast.error{border-color:var(--red);}
+.modal-overlay{display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.85);backdrop-filter:blur(4px);align-items:center;justify-content:center;}
+.modal-overlay.show{display:flex;}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:28px;width:min(480px,95vw);}
+.modal h3{font-family:'Orbitron',monospace;font-size:0.9rem;margin-bottom:18px;color:var(--accent);}
+.detail-row{display:flex;gap:12px;margin-bottom:10px;font-size:0.82rem;}
+.detail-label{color:var(--text2);min-width:140px;font-family:'Space Mono',monospace;font-size:0.72rem;}
+.detail-value{color:var(--text);}
+.modal-actions{display:flex;gap:10px;margin-top:20px;justify-content:flex-end;}
+@media(max-width:768px){main{padding:14px 10px;}.stats-grid{grid-template-columns:1fr 1fr;}table{font-size:0.72rem;}th,td{padding:8px 10px;}}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div class="auth-screen" id="authScreen">
+  <div class="auth-box">
+    <div class="auth-logo">ADMIN</div>
+    <div class="auth-sub">StockAI Admin Panel</div>
+    <div id="authError" style="background:rgba(255,77,109,0.1);border:1px solid rgba(255,77,109,0.3);border-radius:8px;padding:10px;font-size:0.78rem;color:var(--red);margin-bottom:14px;display:none;"></div>
+    <div class="fg"><label>อีเมล Admin</label><input type="email" id="adminEmail" placeholder="admin@email.com"></div>
+    <div class="fg"><label>รหัสผ่าน</label><input type="password" id="adminPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doAdminLogin()"></div>
+    <button class="btn" onclick="doAdminLogin()">เข้าสู่ระบบ Admin</button>
+  </div>
+</div>
+
+<!-- ADMIN APP -->
+<div id="adminApp" style="display:none">
+<header>
+  <div class="logo">STOCK<span>AI</span> ADMIN</div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <span style="font-size:0.75rem;color:var(--text2);font-family:'Space Mono',monospace;" id="adminEmailDisplay"></span>
+    <button class="btn btn-sm btn-outline" onclick="doLogout()">ออกจากระบบ</button>
+  </div>
+</header>
+
+<main>
+  <!-- STATS -->
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-label">User ทั้งหมด</div><div class="stat-value" id="statTotal">0</div></div>
+    <div class="stat-card gold"><div class="stat-label">Premium Users</div><div class="stat-value" id="statPremium" style="color:var(--gold)">0</div></div>
+    <div class="stat-card red"><div class="stat-label">รอ Approve</div><div class="stat-value" id="statPending" style="color:var(--red)">0</div></div>
+    <div class="stat-card"><div class="stat-label">รายได้เดือนนี้</div><div class="stat-value" id="statRevenue" style="color:var(--green)">฿0</div></div>
+  </div>
+
+  <!-- PENDING PAYMENTS -->
+  <div class="section-title">แจ้งโอนเงินรอ Approve</div>
+  <div class="panel">
+    <div class="panel-header"><h3>Pending Payments</h3><button class="btn btn-outline btn-sm" onclick="loadData()">🔄 Refresh</button></div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead><tr><th>วันที่แจ้ง</th><th>ชื่อ User</th><th>อีเมล</th><th>ผู้โอน</th><th>จำนวน</th><th>วันที่โอน</th><th>Ref</th><th>สถานะ</th><th>Action</th></tr></thead>
+        <tbody id="paymentsBody"><tr><td colspan="9" style="text-align:center;color:var(--text3);padding:30px;">กำลังโหลด...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ALL USERS -->
+  <div class="section-title">จัดการ Users</div>
+  <div class="panel">
+    <div class="panel-header"><h3>All Users</h3></div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead><tr><th>ชื่อ</th><th>อีเมล</th><th>Plan</th><th>หมดอายุ</th><th>สมัครเมื่อ</th><th>Action</th></tr></thead>
+        <tbody id="usersBody"><tr><td colspan="6" style="text-align:center;color:var(--text3);padding:30px;">กำลังโหลด...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+</div>
+
+<!-- PAYMENT DETAIL MODAL -->
+<div class="modal-overlay" id="paymentModal" onclick="if(event.target.id==='paymentModal')closeModal()">
+  <div class="modal">
+    <h3>💳 รายละเอียดการโอน</h3>
+    <div id="paymentDetail"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline btn-sm" onclick="closeModal()">ปิด</button>
+      <button class="btn btn-danger btn-sm" id="rejectBtn">❌ ปฏิเสธ</button>
+      <button class="btn btn-gold btn-sm" id="approveBtn">✅ Approve Premium</button>
+    </div>
+  </div>
+</div>
+
+<!-- SET PREMIUM MODAL -->
+<div class="modal-overlay" id="setPremiumModal" onclick="if(event.target.id==='setPremiumModal')document.getElementById('setPremiumModal').classList.remove('show')">
+  <div class="modal">
+    <h3>⭐ ตั้งค่า Premium</h3>
+    <div id="setPremiumContent"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline btn-sm" onclick="document.getElementById('setPremiumModal').classList.remove('show')">ยกเลิก</button>
+      <button class="btn btn-gold btn-sm" id="confirmPremiumBtn">✅ ยืนยัน</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, setDoc, getDoc, getDocs, collection, updateDoc, query, orderBy, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+const FB_CFG={apiKey:"AIzaSyAb073KKqOV5aYP_S57JTvOUOCUWvr2Ebo",authDomain:"stock-web-c2068.firebaseapp.com",projectId:"stock-web-c2068",storageBucket:"stock-web-c2068.firebasestorage.app",messagingSenderId:"4202725865",appId:"1:4202725865:web:180682bc845693d92c0b78"};
+const ADMIN_EMAILS = ['brighttk30@gmail.com']; // เพิ่ม email admin ได้
+
+const app = initializeApp(FB_CFG);
+const db = getFirestore(app);
+const auth = getAuth(app);
+
+let currentPaymentId = null;
+let currentPaymentData = null;
+let allUsers = [];
+let allPayments = [];
+
+function showToast(msg,isError=false){ const t=document.getElementById('toast'); t.textContent=msg; t.className='toast show'+(isError?' error':''); setTimeout(()=>t.classList.remove('show'),3500); }
+
+// ── AUTH ──
+window.doAdminLogin = async () => {
+  const email = document.getElementById('adminEmail').value.trim();
+  const pass = document.getElementById('adminPass').value;
+  try{
+    await signInWithEmailAndPassword(auth, email, pass);
+  }catch(e){
+    const err = document.getElementById('authError');
+    err.textContent = 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
+    err.style.display = 'block';
+  }
+};
+window.doLogout = async () => { await signOut(auth); window.location.reload(); };
+
+onAuthStateChanged(auth, async (user) => {
+  if(user){
+    // Check if admin
+    const profSnap = await getDoc(doc(db,'users',user.uid,'profile','data'));
+    const profile = profSnap.exists() ? profSnap.data() : {};
+    if(!ADMIN_EMAILS.includes(user.email) && !profile.isAdmin){
+      await signOut(auth);
+      const err = document.getElementById('authError');
+      err.textContent = 'คุณไม่มีสิทธิ์เข้าถึง Admin Panel';
+      err.style.display = 'block';
+      return;
+    }
+    document.getElementById('authScreen').classList.add('hidden');
+    document.getElementById('adminApp').style.display = 'block';
+    document.getElementById('adminEmailDisplay').textContent = user.email;
+    await loadData();
+  } else {
+    document.getElementById('authScreen').classList.remove('hidden');
+    document.getElementById('adminApp').style.display = 'none';
+  }
+});
+
+// ── LOAD DATA ──
+window.loadData = async () => {
+  await Promise.all([loadPayments(), loadUsers()]);
+  updateStats();
+};
+
+async function loadPayments(){
+  try{
+    const snap = await getDocs(query(collection(db,'payments'), orderBy('submittedAt','desc')));
+    allPayments = snap.docs.map(d=>({id:d.id,...d.data()}));
+    renderPayments();
+  }catch(e){ console.error(e); }
+}
+
+async function loadUsers(){
+  try{
+    const snap = await getDocs(collection(db,'users'));
+    allUsers = [];
+    for(const userDoc of snap.docs){
+      const profSnap = await getDoc(doc(db,'users',userDoc.id,'profile','data'));
+      if(profSnap.exists()) allUsers.push({uid:userDoc.id,...profSnap.data()});
+    }
+    renderUsers();
+  }catch(e){ console.error(e); }
+}
+
+function updateStats(){
+  document.getElementById('statTotal').textContent = allUsers.length;
+  const premium = allUsers.filter(u=>u.plan==='premium'&&u.planExpiry>Date.now()).length;
+  document.getElementById('statPremium').textContent = premium;
+  const pending = allPayments.filter(p=>p.status==='pending').length;
+  document.getElementById('statPending').textContent = pending;
+  const thisMonth = new Date(); thisMonth.setDate(1); thisMonth.setHours(0,0,0,0);
+  const revenue = allPayments.filter(p=>p.status==='approved'&&p.submittedAt?.toDate()>=thisMonth).reduce((s,p)=>s+p.amount,0);
+  document.getElementById('statRevenue').textContent = '฿'+revenue.toLocaleString();
+}
+
+function renderPayments(){
+  const tbody = document.getElementById('paymentsBody');
+  const pending = allPayments.filter(p=>p.status==='pending');
+  if(!pending.length){ tbody.innerHTML='<tr><td colspan="9" style="text-align:center;color:var(--text3);padding:30px;">ไม่มีรายการรอ Approve</td></tr>'; return; }
+  tbody.innerHTML = pending.map(p=>{
+    const date = p.submittedAt?.toDate ? p.submittedAt.toDate().toLocaleDateString('th-TH') : '--';
+    return `<tr>
+      <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${date}</td>
+      <td>${p.userName||'--'}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${p.email||'--'}</td>
+      <td>${p.payerName||'--'}</td>
+      <td style="color:var(--gold);font-weight:700;">฿${p.amount||0}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${p.date||'--'} ${p.time||''}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${p.ref||'-'}</td>
+      <td><span class="status-badge status-pending">รอ Approve</span></td>
+      <td><button class="btn btn-sm" onclick="viewPayment('${p.id}')">ดูรายละเอียด</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderUsers(){
+  const tbody = document.getElementById('usersBody');
+  if(!allUsers.length){ tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:30px;">ไม่มี User</td></tr>'; return; }
+  tbody.innerHTML = allUsers.map(u=>{
+    const isPrem = u.plan==='premium' && u.planExpiry > Date.now();
+    const expiry = u.planExpiry ? new Date(u.planExpiry).toLocaleDateString('th-TH') : '--';
+    const created = u.createdAt ? new Date(u.createdAt).toLocaleDateString('th-TH') : '--';
+    return `<tr>
+      <td>${u.name||'--'}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${u.email||'--'}</td>
+      <td><span class="status-badge ${isPrem?'plan-premium':'plan-free'}">${isPrem?'PREMIUM':'FREE'}</span></td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${isPrem?expiry:'--'}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${created}</td>
+      <td><div class="action-btns">
+        <button class="btn btn-gold btn-sm" onclick="openSetPremium('${u.uid}','${u.name||u.email}')">⭐ Premium</button>
+        ${isPrem?`<button class="btn btn-danger btn-sm" onclick="revokePremium('${u.uid}')">ยกเลิก</button>`:''}
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+// ── PAYMENT ACTIONS ──
+window.viewPayment = (id) => {
+  const p = allPayments.find(x=>x.id===id);
+  if(!p) return;
+  currentPaymentId = id;
+  currentPaymentData = p;
+  document.getElementById('paymentDetail').innerHTML = `
+    <div class="detail-row"><span class="detail-label">ชื่อ User:</span><span class="detail-value">${p.userName||'--'}</span></div>
+    <div class="detail-row"><span class="detail-label">อีเมล:</span><span class="detail-value">${p.email||'--'}</span></div>
+    <div class="detail-row"><span class="detail-label">ชื่อผู้โอน:</span><span class="detail-value">${p.payerName||'--'}</span></div>
+    <div class="detail-row"><span class="detail-label">จำนวนเงิน:</span><span class="detail-value" style="color:var(--gold);font-weight:700;">฿${p.amount||0}</span></div>
+    <div class="detail-row"><span class="detail-label">วันที่โอน:</span><span class="detail-value">${p.date||'--'} เวลา ${p.time||'--'}</span></div>
+    <div class="detail-row"><span class="detail-label">Ref 6 หลัก:</span><span class="detail-value">${p.ref||'-'}</span></div>
+    <div class="detail-row"><span class="detail-label">หมายเหตุ:</span><span class="detail-value">${p.note||'-'}</span></div>`;
+  document.getElementById('approveBtn').onclick = () => approvePayment(id, p.uid);
+  document.getElementById('rejectBtn').onclick = () => rejectPayment(id);
+  document.getElementById('paymentModal').classList.add('show');
+};
+window.closeModal = () => document.getElementById('paymentModal').classList.remove('show');
+
+async function approvePayment(paymentId, uid){
+  try{
+    // Set user as premium for 30 days
+    const expiry = Date.now() + 30*24*60*60*1000;
+    await setDoc(doc(db,'users',uid,'profile','data'),{plan:'premium',planExpiry:expiry},{merge:true});
+    await updateDoc(doc(db,'payments',paymentId),{status:'approved',approvedAt:new Date().toISOString()});
+    showToast('✅ Approve สำเร็จ! User ได้ Premium 30 วัน');
+    closeModal();
+    await loadData();
+  }catch(e){ showToast('Error: '+e.message,true); }
+}
+
+async function rejectPayment(paymentId){
+  if(!confirm('ยืนยันปฏิเสธการโอน?')) return;
+  try{
+    await updateDoc(doc(db,'payments',paymentId),{status:'rejected',rejectedAt:new Date().toISOString()});
+    showToast('❌ ปฏิเสธแล้ว');
+    closeModal();
+    await loadData();
+  }catch(e){ showToast('Error: '+e.message,true); }
+}
+
+// ── MANUAL PREMIUM ──
+window.openSetPremium = (uid, name) => {
+  document.getElementById('setPremiumContent').innerHTML = `
+    <p style="font-size:0.82rem;color:var(--text2);margin-bottom:16px;">ตั้งค่า Premium สำหรับ: <strong style="color:var(--text)">${name}</strong></p>
+    <div class="fg"><label>ระยะเวลา Premium (วัน)</label><input type="number" id="premiumDays" value="30" min="1" max="365"></div>`;
+  document.getElementById('confirmPremiumBtn').onclick = () => setPremiumManual(uid);
+  document.getElementById('setPremiumModal').classList.add('show');
+};
+
+async function setPremiumManual(uid){
+  const days = parseInt(document.getElementById('premiumDays').value)||30;
+  const expiry = Date.now() + days*24*60*60*1000;
+  try{
+    await setDoc(doc(db,'users',uid,'profile','data'),{plan:'premium',planExpiry:expiry},{merge:true});
+    showToast(`✅ ตั้งค่า Premium ${days} วันแล้ว`);
+    document.getElementById('setPremiumModal').classList.remove('show');
+    await loadData();
+  }catch(e){ showToast('Error: '+e.message,true); }
+}
+
+window.revokePremium = async (uid) => {
+  if(!confirm('ยกเลิก Premium?')) return;
+  try{
+    await setDoc(doc(db,'users',uid,'profile','data'),{plan:'free',planExpiry:0},{merge:true});
+    showToast('✅ ยกเลิก Premium แล้ว');
+    await loadData();
+  }catch(e){ showToast('Error: '+e.message,true); }
+};
+</script>
+</body>
+</html>
