@@ -370,7 +370,7 @@ tr:hover td{background:rgba(0,212,170,0.03);}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const FB_CFG={apiKey:"AIzaSyAb073KKqOV5aYP_S57JTvOUOCUWvr2Ebo",authDomain:"stock-web-c2068.firebaseapp.com",projectId:"stock-web-c2068",storageBucket:"stock-web-c2068.firebasestorage.app",messagingSenderId:"4202725865",appId:"1:4202725865:web:180682bc845693d92c0b78"};
 const ADMIN_EMAIL = 'brighttk30@gmail.com'; // เปลี่ยนเป็น email admin จริง
@@ -468,15 +468,8 @@ window.doRegister = async () => {
 
 window.doGoogleLogin = async () => {
   try{
-    const cred = await signInWithPopup(auth, googleProvider);
-    const profRef = doc(db,'users',cred.user.uid,'profile','data');
-    const snap = await getDoc(profRef);
-    if(!snap.exists()){
-      await setDoc(profRef,{
-        name:cred.user.displayName||'', email:cred.user.email||'',
-        plan:'free', planExpiry:0, createdAt:Date.now(), isAdmin:false
-      });
-    }
+    // Use redirect instead of popup for GitHub Pages compatibility
+    await signInWithRedirect(auth, googleProvider);
   }catch(e){ showAuthError('Google login ล้มเหลว: '+e.message); }
 };
 
@@ -498,6 +491,25 @@ document.addEventListener('click',(e)=>{
 });
 
 // ── AUTH STATE ──
+// Handle Google redirect result
+getRedirectResult(auth).then(async (result) => {
+  if(result?.user){
+    const profRef = doc(db,'users',result.user.uid,'profile','data');
+    const snap = await getDoc(profRef);
+    if(!snap.exists()){
+      const deviceId = await getDeviceFingerprint();
+      const trialUsed = await checkTrialUsed(deviceId);
+      const trialExpiry = trialUsed ? 0 : Date.now() + 9*24*60*60*1000;
+      await setDoc(profRef,{
+        name:result.user.displayName||'', email:result.user.email||'',
+        plan: trialUsed?'free':'trial', planExpiry:trialExpiry,
+        deviceId, createdAt:Date.now(), isAdmin:false
+      });
+      if(!trialUsed) await setDoc(doc(db,'deviceTrials',deviceId),{usedAt:Date.now(),email:result.user.email});
+    }
+  }
+}).catch(e=>console.warn('Redirect result:',e));
+
 onAuthStateChanged(auth, async (user) => {
   if(user){
     currentUser = user;
@@ -506,7 +518,15 @@ onAuthStateChanged(auth, async (user) => {
     // Load profile
     const profSnap = await getDoc(doc(db,'users',user.uid,'profile','data'));
     if(profSnap.exists()) userProfile = profSnap.data();
-    else { userProfile = {name:user.displayName||'',email:user.email||'',plan:'free',planExpiry:0}; }
+    else {
+      // Auto create profile if not exists (Google login)
+      const deviceId = await getDeviceFingerprint();
+      const trialUsed = await checkTrialUsed(deviceId);
+      const trialExpiry = trialUsed ? 0 : Date.now() + 9*24*60*60*1000;
+      userProfile = {name:user.displayName||'',email:user.email||'',plan:trialUsed?'free':'trial',planExpiry:trialExpiry,deviceId,createdAt:Date.now(),isAdmin:false};
+      await setDoc(doc(db,'users',user.uid,'profile','data'), userProfile);
+      if(!trialUsed) await setDoc(doc(db,'deviceTrials',deviceId),{usedAt:Date.now(),email:user.email});
+    }
     updateUserUI();
     await initUserData();
     await fetchFXRate();
