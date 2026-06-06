@@ -446,23 +446,15 @@ window.doRegister = async () => {
   try{
     const cred = await createUserWithEmailAndPassword(auth, email, pass);
     await updateProfile(cred.user, { displayName: name });
-    // Check device fingerprint for trial abuse prevention
-    const deviceId = await getDeviceFingerprint();
-    const trialUsed = await checkTrialUsed(deviceId);
-    const trialExpiry = trialUsed ? 0 : Date.now() + 9*24*60*60*1000; // 9 days trial
+    // Give 9 day trial to all new users
+    const trialExpiry = Date.now() + 9*24*60*60*1000;
     await setDoc(doc(db,'users',cred.user.uid,'profile','data'),{
       name, email,
-      plan: trialUsed ? 'free' : 'trial',
+      plan: 'trial',
       planExpiry: trialExpiry,
-      trialUsed: !trialUsed,
-      deviceId,
       createdAt: Date.now(),
       isAdmin: false
     });
-    // Mark device as used trial
-    if(!trialUsed){
-      await setDoc(doc(db,'deviceTrials',deviceId),{usedAt:Date.now(),email});
-    }
   }catch(e){ showAuthError(e.code==='auth/email-already-in-use'?'อีเมลนี้มีผู้ใช้งานแล้ว':'เกิดข้อผิดพลาด: '+e.message); }
 };
 
@@ -497,15 +489,12 @@ getRedirectResult(auth).then(async (result) => {
     const profRef = doc(db,'users',result.user.uid,'profile','data');
     const snap = await getDoc(profRef);
     if(!snap.exists()){
-      const deviceId = await getDeviceFingerprint();
-      const trialUsed = await checkTrialUsed(deviceId);
-      const trialExpiry = trialUsed ? 0 : Date.now() + 9*24*60*60*1000;
+      const trialExpiry = Date.now() + 9*24*60*60*1000;
       await setDoc(profRef,{
         name:result.user.displayName||'', email:result.user.email||'',
-        plan: trialUsed?'free':'trial', planExpiry:trialExpiry,
-        deviceId, createdAt:Date.now(), isAdmin:false
+        plan:'trial', planExpiry:trialExpiry,
+        createdAt:Date.now(), isAdmin:false
       });
-      if(!trialUsed) await setDoc(doc(db,'deviceTrials',deviceId),{usedAt:Date.now(),email:result.user.email});
     }
   }
 }).catch(e=>console.warn('Redirect result:',e));
@@ -520,12 +509,9 @@ onAuthStateChanged(auth, async (user) => {
     if(profSnap.exists()) userProfile = profSnap.data();
     else {
       // Auto create profile if not exists (Google login)
-      const deviceId = await getDeviceFingerprint();
-      const trialUsed = await checkTrialUsed(deviceId);
-      const trialExpiry = trialUsed ? 0 : Date.now() + 9*24*60*60*1000;
-      userProfile = {name:user.displayName||'',email:user.email||'',plan:trialUsed?'free':'trial',planExpiry:trialExpiry,deviceId,createdAt:Date.now(),isAdmin:false};
+      const trialExpiry = Date.now() + 9*24*60*60*1000;
+      userProfile = {name:user.displayName||'',email:user.email||'',plan:'trial',planExpiry:trialExpiry,createdAt:Date.now(),isAdmin:false};
       await setDoc(doc(db,'users',user.uid,'profile','data'), userProfile);
-      if(!trialUsed) await setDoc(doc(db,'deviceTrials',deviceId),{usedAt:Date.now(),email:user.email});
     }
     updateUserUI();
     await initUserData();
