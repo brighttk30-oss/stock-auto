@@ -737,25 +737,24 @@ window.selectTicker=async(ticker,type)=>{
   document.getElementById('srAIText').textContent='--';
   const tvSym=type==='GOLD'?'COMEX:GC1!':type==='FX'?'FOREX:USDTHB':ticker;
   const tvDiv=document.getElementById('tvContainer'); tvDiv.innerHTML='';
-  const inner=document.createElement('div'); inner.id='tv_'+ticker+'_'+Date.now(); inner.style.height='100%'; tvDiv.appendChild(inner);
-  const s=document.createElement('script'); s.src='https://s3.tradingview.com/tv.js';
-  s.onload=()=>{ try{ new TradingView.widget({
-    width:'100%', height:tvDiv.offsetHeight||460,
-    symbol:tvSym, interval:'D',
-    timezone:'Asia/Bangkok', theme:'dark', style:'1', locale:'th',
-    toolbar_bg:'#161b22', enable_publishing:false,
-    allow_symbol_change:true, autosize:true,
-    container_id:inner.id,
-    studies:[
-      'RSI@tv-basicstudies',
-      'MACD@tv-basicstudies',
-      {"id":"MAExp@tv-basicstudies","inputs":{"length":15},"styles":{"plot_0":{"color":"#FFD700","linewidth":1}}},
-      {"id":"MAExp@tv-basicstudies","inputs":{"length":30},"styles":{"plot_0":{"color":"#00BCD4","linewidth":1}}},
-      {"id":"MAExp@tv-basicstudies","inputs":{"length":100},"styles":{"plot_0":{"color":"#FF6B6B","linewidth":2}}},
-      {"id":"MAExp@tv-basicstudies","inputs":{"length":200},"styles":{"plot_0":{"color":"#A78BFA","linewidth":2}}}
-    ]
-  }); }catch(e){} };
-  tvDiv.appendChild(s); calcSR(ticker);
+  // Use TradingView iframe embed - works on all hosts
+  const studies = encodeURIComponent(JSON.stringify([
+    "RSI@tv-basicstudies",
+    "MACD@tv-basicstudies",
+    "MAExp@tv-basicstudies",
+    "MAExp@tv-basicstudies",
+    "MAExp@tv-basicstudies",
+    "MAExp@tv-basicstudies"
+  ]));
+  const iframeUrl = `https://www.tradingview.com/widgetembed/?frameElementId=tv_frame&symbol=${encodeURIComponent(tvSym)}&interval=D&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=161b22&studies=RSI%40tv-basicstudies%1FMACD%40tv-basicstudies%1FMAExp%40tv-basicstudies%1FMAExp%40tv-basicstudies%1FMAExp%40tv-basicstudies%1FMAExp%40tv-basicstudies&hideideas=1&theme=dark&style=1&timezone=Asia%2FBangkok&studies_overrides=%7B%7D&overrides=%7B%22mainSeriesProperties.candleStyle.upColor%22%3A%22%2300d4aa%22%2C%22mainSeriesProperties.candleStyle.downColor%22%3A%22%23ff4d6d%22%7D&enabled_features=%5B%5D&disabled_features=%5B%5D&locale=th&utm_source=stock-portfolio`;
+  tvDiv.innerHTML = `<iframe 
+    src="${iframeUrl}"
+    style="width:100%;height:100%;border:none;"
+    allowtransparency="true"
+    scrolling="no"
+    allowfullscreen
+  ></iframe>`;
+  calcSR(ticker);
 };
 window.closeChart=()=>{ selectedTicker=null; document.getElementById('chartPanel').classList.remove('show'); document.getElementById('tvContainer').innerHTML=''; renderHoldings(); };
 function calcSR(ticker){
