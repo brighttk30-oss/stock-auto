@@ -237,7 +237,8 @@ async function loadUsers(){
 function updateStats(){
   document.getElementById('statTotal').textContent = allUsers.length;
   const premium = allUsers.filter(u=>u.plan==='premium'&&u.planExpiry>Date.now()).length;
-  document.getElementById('statPremium').textContent = premium;
+  const trial = allUsers.filter(u=>u.plan==='trial'&&u.planExpiry>Date.now()).length;
+  document.getElementById('statPremium').textContent = premium + (trial>0?` (+${trial} trial)`:'');
   const pending = allPayments.filter(p=>p.status==='pending').length;
   document.getElementById('statPending').textContent = pending;
   const thisMonth = new Date(); thisMonth.setDate(1); thisMonth.setHours(0,0,0,0);
@@ -270,17 +271,19 @@ function renderUsers(){
   if(!allUsers.length){ tbody.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:30px;">ไม่มี User</td></tr>'; return; }
   tbody.innerHTML = allUsers.map(u=>{
     const isPrem = u.plan==='premium' && u.planExpiry > Date.now();
-    const expiry = u.planExpiry ? new Date(u.planExpiry).toLocaleDateString('th-TH') : '--';
+    const isTrial = u.plan==='trial' && u.planExpiry > Date.now();
+    const expiry = u.planExpiry ? new Date(parseInt(u.planExpiry)).toLocaleDateString('th-TH') : '--';
     const created = u.createdAt ? new Date(u.createdAt).toLocaleDateString('th-TH') : '--';
     return `<tr>
       <td>${u.name||'--'}</td>
       <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${u.email||'--'}</td>
-      <td><span class="status-badge ${isPrem?'plan-premium':'plan-free'}">${isPrem?'PREMIUM':'FREE'}</span></td>
+      <td><span class="status-badge ${isPrem?'plan-premium':isTrial?'plan-premium':'plan-free'}" style="${isTrial?'background:rgba(0,212,170,0.2);color:#00d4aa;':''}">${isPrem?'PREMIUM':isTrial?'TRIAL':'FREE'}</span></td>
       <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${isPrem?expiry:'--'}</td>
       <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${created}</td>
       <td><div class="action-btns">
-        <button class="btn btn-gold btn-sm" onclick="openSetPremium('${u.uid}','${u.name||u.email}')">⭐ Premium</button>
-        ${isPrem?`<button class="btn btn-danger btn-sm" onclick="revokePremium('${u.uid}')">ยกเลิก</button>`:''}
+        <button class="btn btn-gold btn-sm" onclick="openSetPremium('${u.uid}','${u.name||u.email}','premium')">⭐ Premium</button>
+        <button class="btn btn-sm" onclick="openSetPremium('${u.uid}','${u.name||u.email}','trial')" style="background:transparent;color:#00d4aa;border:1px solid #00d4aa;">🎁 Trial</button>
+        ${(isPrem||isTrial)?`<button class="btn btn-danger btn-sm" onclick="revokePremium('${u.uid}')">ยกเลิก</button>`:''}
       </div></td>
     </tr>`;
   }).join('');
@@ -329,20 +332,24 @@ async function rejectPayment(paymentId){
 }
 
 // ── MANUAL PREMIUM ──
-window.openSetPremium = (uid, name) => {
+window.openSetPremium = (uid, name, type='premium') => {
+  const label = type==='trial' ? 'Trial' : 'Premium';
+  const defaultDays = type==='trial' ? 9 : 30;
   document.getElementById('setPremiumContent').innerHTML = `
-    <p style="font-size:0.82rem;color:var(--text2);margin-bottom:16px;">ตั้งค่า Premium สำหรับ: <strong style="color:var(--text)">${name}</strong></p>
-    <div class="fg"><label>ระยะเวลา Premium (วัน)</label><input type="number" id="premiumDays" value="30" min="1" max="365"></div>`;
+    <p style="font-size:0.82rem;color:var(--text2);margin-bottom:16px;">ตั้งค่า <strong style="color:${type==='trial'?'#00d4aa':'#f7c948'}">${label}</strong> สำหรับ: <strong style="color:var(--text)">${name}</strong></p>
+    <div class="fg"><label>ระยะเวลา (วัน)</label><input type="number" id="premiumDays" value="${defaultDays}" min="1" max="365"></div>
+    <input type="hidden" id="premiumType" value="${type}">`;
   document.getElementById('confirmPremiumBtn').onclick = () => setPremiumManual(uid);
   document.getElementById('setPremiumModal').classList.add('show');
 };
 
 async function setPremiumManual(uid){
   const days = parseInt(document.getElementById('premiumDays').value)||30;
+  const type = document.getElementById('premiumType')?.value || 'premium';
   const expiry = Date.now() + days*24*60*60*1000;
   try{
-    await setDoc(doc(db,'users',uid,'profile','data'),{plan:'premium',planExpiry:expiry},{merge:true});
-    showToast(`✅ ตั้งค่า Premium ${days} วันแล้ว`);
+    await setDoc(doc(db,'users',uid,'profile','data'),{plan:type,planExpiry:expiry},{merge:true});
+    showToast(`✅ ตั้งค่า ${type==='trial'?'Trial':'Premium'} ${days} วันแล้ว`);
     document.getElementById('setPremiumModal').classList.remove('show');
     await loadData();
   }catch(e){ showToast('Error: '+e.message,true); }

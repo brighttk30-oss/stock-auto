@@ -345,9 +345,10 @@ tr:hover td{background:rgba(0,212,170,0.03);}
       <div style="font-size:0.8rem;color:var(--text);line-height:2;">✅ AI วิเคราะห์ Bull/Bear/สรุป<br>✅ ข่าวล่าสุด + ผลกระทบ<br>✅ Auto วิเคราะห์ทุกวัน 08:00 & 21:00<br>✅ แนวรับ/แนวต้าน AI<br>✅ ไม่จำกัดจำนวนหุ้น</div>
     </div>
     <div class="promptpay-box">
-      <div style="font-size:0.78rem;color:var(--text2);margin-bottom:8px;">โอนเงินผ่าน PromptPay</div>
-      <div class="promptpay-number">093-543-2664</div>
-      <div class="promptpay-name">ชื่อ: Bright TK</div>
+      <div style="font-size:0.78rem;color:var(--text2);margin-bottom:10px;">สแกน QR เพื่อชำระเงิน</div>
+      <img src="qr-payment.jpg" alt="PromptPay QR" style="width:180px;height:180px;border-radius:10px;margin:0 auto 12px;display:block;object-fit:contain;background:#fff;padding:8px;">
+      <div class="promptpay-number">004-999-061989-397</div>
+      <div class="promptpay-name">นาย ฐากร สุขะวิสิษฐ์</div>
       <div class="price-tag">฿99 / เดือน</div>
       <div style="font-size:0.72rem;color:var(--text3);">หลังโอนแล้วกรอกข้อมูลด้านล่าง Admin จะ approve ภายใน 24 ชั่วโมง</div>
     </div>
@@ -393,11 +394,30 @@ let autoTimer = null;
 let newsCountdown = null;
 let dbUnsubscribe = null;
 
-function isPremium(){ return userProfile?.plan === 'premium' && userProfile?.planExpiry > Date.now(); }
+function isPremium(){ return (userProfile?.plan === 'premium' || userProfile?.plan === 'trial') && userProfile?.planExpiry > Date.now(); }
 function isAdmin(){ return currentUser?.email === ADMIN_EMAIL || userProfile?.isAdmin === true; }
 function getKey(){ return localStorage.getItem('or_key_'+currentUser?.uid)||''; }
 function saveKey(k){ localStorage.setItem('or_key_'+currentUser?.uid, k); }
 function getSchedule(){ return{morning:localStorage.getItem('morning_time')||'08:00',evening:localStorage.getItem('evening_time')||'21:00'}; }
+
+// ── DEVICE FINGERPRINT ──
+async function getDeviceFingerprint(){
+  const data = [
+    navigator.userAgent, navigator.language, screen.width+'x'+screen.height,
+    screen.colorDepth, new Date().getTimezoneOffset(),
+    navigator.hardwareConcurrency||'', navigator.platform||''
+  ].join('|');
+  const encoder = new TextEncoder();
+  const buf = await crypto.subtle.digest('SHA-256', encoder.encode(data));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('').substring(0,32);
+}
+
+async function checkTrialUsed(deviceId){
+  try{
+    const snap = await getDoc(doc(db,'deviceTrials',deviceId));
+    return snap.exists();
+  }catch(e){ return false; }
+}
 
 // ── AUTH ──
 window.switchAuthTab = (tab) => {
@@ -426,9 +446,23 @@ window.doRegister = async () => {
   try{
     const cred = await createUserWithEmailAndPassword(auth, email, pass);
     await updateProfile(cred.user, { displayName: name });
+    // Check device fingerprint for trial abuse prevention
+    const deviceId = await getDeviceFingerprint();
+    const trialUsed = await checkTrialUsed(deviceId);
+    const trialExpiry = trialUsed ? 0 : Date.now() + 9*24*60*60*1000; // 9 days trial
     await setDoc(doc(db,'users',cred.user.uid,'profile','data'),{
-      name, email, plan:'free', planExpiry:0, createdAt:Date.now(), isAdmin:false
+      name, email,
+      plan: trialUsed ? 'free' : 'trial',
+      planExpiry: trialExpiry,
+      trialUsed: !trialUsed,
+      deviceId,
+      createdAt: Date.now(),
+      isAdmin: false
     });
+    // Mark device as used trial
+    if(!trialUsed){
+      await setDoc(doc(db,'deviceTrials',deviceId),{usedAt:Date.now(),email});
+    }
   }catch(e){ showAuthError(e.code==='auth/email-already-in-use'?'อีเมลนี้มีผู้ใช้งานแล้ว':'เกิดข้อผิดพลาด: '+e.message); }
 };
 
@@ -501,12 +535,32 @@ function updateUserUI(){
   document.getElementById('menuUserName').textContent = name;
   document.getElementById('menuUserEmail').textContent = currentUser?.email || '';
   const badge = document.getElementById('userPlanBadge');
-  if(isPremium()){ badge.textContent='PREMIUM'; badge.className='plan-badge plan-premium'; }
-  else { badge.textContent='FREE'; badge.className='plan-badge plan-free'; }
-  // Show/hide AI sections for free users
-  if(!isPremium()){
-    renderLockedAI();
+  const isTrial = userProfile?.plan === 'trial' && userProfile?.planExpiry > Date.now();
+  const isPrem = userProfile?.plan === 'premium' && userProfile?.planExpiry > Date.now();
+  if(isPrem){ badge.textContent='PREMIUM'; badge.className='plan-badge plan-premium'; }
+  else if(isTrial){
+    const daysLeft = Math.ceil((userProfile.planExpiry - Date.now()) / (24*60*60*1000));
+    badge.textContent=`ทดลอง ${daysLeft}วัน`; badge.className='plan-badge plan-premium';
+    // Warning if 3 days or less
+    if(daysLeft <= 3){
+      setTimeout(()=>{
+        showTrialWarning(daysLeft);
+      }, 2000);
+    }
   }
+  else { badge.textContent='FREE'; badge.className='plan-badge plan-free'; }
+  if(!isPremium()){ renderLockedAI(); }
+}
+
+function showTrialWarning(daysLeft){
+  const msg = daysLeft <= 0
+    ? 'หมดอายุทดลองใช้แล้ว กรุณาอัปเกรดเพื่อใช้งานต่อ'
+    : `เหลืออีก ${daysLeft} วัน ก่อนหมดอายุทดลองใช้ฟรี`;
+  // Show banner
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:60px;left:0;right:0;z-index:99;background:linear-gradient(90deg,#f7c948,#ff9f43);color:#000;text-align:center;padding:10px;font-size:0.82rem;font-weight:700;display:flex;align-items:center;justify-content:center;gap:12px;';
+  banner.innerHTML = `⏰ ${msg} <button onclick="openModal('upgradeModal');this.parentElement.remove()" style="background:#000;color:#f7c948;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:0.75rem;font-weight:700;">อัปเกรด ฿99/เดือน</button> <button onclick="this.parentElement.remove()" style="background:transparent;border:none;cursor:pointer;font-size:1rem;">✕</button>`;
+  document.body.appendChild(banner);
 }
 
 function renderLockedAI(){
@@ -515,7 +569,7 @@ function renderLockedAI(){
       <div class="lock-icon">🔒</div>
       <div class="lock-title">PREMIUM FEATURE</div>
       <div class="lock-desc">AI วิเคราะห์ Bull/Bear/สรุป, แนวรับ/แนวต้าน<br>และข่าวล่าสุดพร้อมผลกระทบ<br>พร้อมให้บริการสำหรับสมาชิก Premium</div>
-      <button class="btn btn-gold" onclick="openModal('upgradeModal')">⭐ อัปเกรดเป็น Premium — 99/เดือน</button>
+      <button class="btn btn-gold" onclick="openModal('upgradeModal')">⭐ อัปเกรดเป็น Premium — ฿99/เดือน</button>
     </div>`;
   document.getElementById('newsSection').innerHTML = `
     <div class="premium-lock">
