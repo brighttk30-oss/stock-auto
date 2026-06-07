@@ -1121,39 +1121,35 @@ let tickerPrices = {};
 let tickerTimer = null;
 let tickerApiFailCount = 0;
 
-async function fetchTickerBatch(symbols) {
-  // Twelve Data รองรับ multi-symbol ด้วย comma ใน URL เดียว
-  // response: ถ้า 1 sym → object ตรง, หลาย sym → { SYM: {...}, SYM2: {...} }
-  const joined = symbols.map(s => encodeURIComponent(s)).join('%2C');
+// ดึงราคาทีละ 1 symbol (free plan ไม่รองรับ batch)
+async function fetchTickerSingle(sym) {
   try {
     const res = await fetch(
-      `https://api.twelvedata.com/quote?symbol=${joined}&apikey=${TD_KEY}`,
-      { signal: AbortSignal.timeout(20000) }
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(sym)}&apikey=${TD_KEY}`,
+      { signal: AbortSignal.timeout(10000) }
     );
-    const data = await res.json();
-    // error ระดับ top-level
-    if (data.status === 'error' || data.code) {
-      tickerApiFailCount++;
-      console.warn('TwelveData batch error:', data.message || data.code);
-      return;
-    }
-    tickerApiFailCount = 0;
-    const entries = symbols.length === 1 ? { [symbols[0]]: data } : data;
-    Object.entries(entries).forEach(([sym, q]) => {
-      if (!q || q.status === 'error' || !q.close) return;
-      const cur = parseFloat(q.close);
-      const prev = parseFloat(q.previous_close) || cur;
-      tickerPrices[sym] = {
-        price: cur,
-        change: cur - prev,
-        changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0
-      };
-    });
-    console.log(`Ticker: loaded ${Object.keys(tickerPrices).length} prices`);
-  } catch(e) {
-    tickerApiFailCount++;
-    console.warn('Ticker batch error:', e.message);
+    const q = await res.json();
+    if (!q || q.status === 'error' || !q.close) return;
+    const cur = parseFloat(q.close);
+    const prev = parseFloat(q.previous_close) || cur;
+    tickerPrices[sym] = {
+      price: cur,
+      change: cur - prev,
+      changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0
+    };
+  } catch(e) { /* ข้ามถ้า error */ }
+}
+
+// ดึงหลายตัวพร้อมกันแบบ parallel แต่จำกัด concurrency
+async function fetchTickerParallel(symbols, concurrency = 4) {
+  const results = [];
+  for (let i = 0; i < symbols.length; i += concurrency) {
+    const batch = symbols.slice(i, i + concurrency);
+    await Promise.all(batch.map(s => fetchTickerSingle(s)));
+    renderTicker1(); // render ทันทีทุก wave
+    if (i + concurrency < symbols.length) await sleep(600);
   }
+  return results;
 }
 
 function buildTickerItem(sym, name) {
@@ -1198,19 +1194,13 @@ function renderTicker1() {
 }
 
 async function loadTickerData() {
-  if (tickerApiFailCount >= 3) {
-    console.warn('Ticker: API fail x3, stop auto-update');
-    renderTicker1(); // render ด้วยของที่มีอยู่
-    return;
-  }
-
   // รวม watchlist + holdings ที่ไม่อยู่ใน watchlist
   const allSyms = [...TICKER_WATCHLIST.map(w => w.s)];
   holdings.forEach(h => {
     if (h.type === 'US' && !allSyms.includes(h.ticker)) allSyms.push(h.ticker);
   });
 
-  // ก่อนดึง watchlist ใหม่ — แสดงราคาจาก prices (พอร์ต) ก่อนเลย
+  // แสดงราคาพอร์ตทันทีก่อน (ไม่รอ watchlist)
   holdings.forEach(h => {
     if (prices[h.ticker] && !tickerPrices[h.ticker]) {
       tickerPrices[h.ticker] = {
@@ -1220,16 +1210,13 @@ async function loadTickerData() {
       };
     }
   });
-  renderTicker1(); // render ทันทีด้วยราคาพอร์ตก่อน
+  renderTicker1();
 
-  // ดึง watchlist แบบ batch ทีละ 10 symbols
-  // Twelve Data free: batch หลาย sym ได้ใน 1 request = ประหยัด quota มาก
-  for (let i = 0; i < allSyms.length; i += 10) {
-    const batch = allSyms.slice(i, i + 10);
-    await fetchTickerBatch(batch);
-    renderTicker1(); // update ทันทีทุก batch
-    if (i + 10 < allSyms.length) await sleep(800); // หน่วง 0.8s ระหว่าง batch
-  }
+  // ดึง watchlist ทั้งหมด 4 ตัวพร้อมกัน หน่วง 600ms ระหว่าง wave
+  // 30 ตัว / 4 = ~8 waves × 600ms = ~5 วินาทีโหลดครบ
+  // ใช้ ~30 req per update, ทุก 5 นาที = 6 req/ชั่วโมง × 30 = 180 req/ชั่วโมง
+  // เปิด 4 ชั่วโมง/วัน = 720 req ยังอยู่ใน 800 limit
+  await fetchTickerParallel(allSyms, 4);
 }
 
 function renderTicker2() {
@@ -1300,7 +1287,7 @@ function startTickerUpdates() {
   if (tickerTimer) clearInterval(tickerTimer);
   tickerTimer = setInterval(() => {
     loadTickerData();
-  }, 5 * 60 * 1000);
+  }, 15 * 60 * 1000); // อัปเดตทุก 15 นาที (~120 req/ชั่วโมง ปลอดภัยใน 800 limit)
 }
 
 
