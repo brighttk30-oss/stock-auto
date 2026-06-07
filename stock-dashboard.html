@@ -37,7 +37,34 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .auth-error{background:rgba(255,77,109,0.1);border:1px solid rgba(255,77,109,0.3);border-radius:8px;padding:10px 14px;font-size:0.78rem;color:var(--red);margin-bottom:14px;display:none;}
 .auth-error.show{display:block;}
 
-/* PIE CHART */
+/* ── TICKER TAPE ── */
+.ticker-wrap{display:flex;align-items:center;background:var(--surface);border-bottom:1px solid var(--border);height:36px;overflow:hidden;position:sticky;top:57px;z-index:90;}
+.ticker-wrap-2{background:rgba(247,201,72,0.06);border-top:1px solid rgba(247,201,72,0.15);border-bottom:1px solid rgba(247,201,72,0.15);top:93px;}
+.ticker-label{flex-shrink:0;font-family:'Space Mono',monospace;font-size:0.6rem;font-weight:700;padding:0 10px;color:var(--accent);border-right:1px solid var(--border);height:100%;display:flex;align-items:center;background:var(--surface2);letter-spacing:1px;}
+.ticker-label-2{color:var(--gold);border-right-color:rgba(247,201,72,0.2);}
+.ticker-track{flex:1;overflow:hidden;height:100%;display:flex;align-items:center;}
+.ticker-inner{display:flex;align-items:center;white-space:nowrap;animation:tickerScroll1 60s linear infinite;}
+.ticker-inner-2{animation:tickerScroll2 80s linear infinite;}
+.ticker-item{display:inline-flex;align-items:center;gap:5px;padding:0 18px;font-family:'Space Mono',monospace;font-size:0.7rem;border-right:1px solid var(--border);cursor:default;}
+.ticker-item-2{border-right-color:rgba(247,201,72,0.15);}
+.ticker-sym{font-weight:700;color:var(--text);}
+.ticker-price{color:var(--text2);}
+.ticker-up{color:var(--green);}
+.ticker-down{color:var(--red);}
+.ticker-neu{color:var(--text3);}
+.ticker-dot-live{width:5px;height:5px;border-radius:50%;background:var(--accent);display:inline-block;animation:pulse 2s ease-in-out infinite;}
+.ticker-loading{padding:0 16px;color:var(--text3);font-family:'Space Mono',monospace;font-size:0.7rem;}
+/* แถบ 2 items */
+.ticker-rec{display:inline-flex;align-items:center;gap:6px;padding:0 20px;font-family:'Noto Sans Thai',sans-serif;font-size:0.72rem;border-right:1px solid rgba(247,201,72,0.15);}
+.ticker-rec-sym{font-family:'Space Mono',monospace;font-weight:700;color:var(--gold);}
+.ticker-rec-action{color:var(--green);font-weight:600;}
+.ticker-rec-price{color:var(--text2);font-family:'Space Mono',monospace;font-size:0.68rem;}
+.ticker-rec-reason{color:var(--text2);font-size:0.7rem;}
+@keyframes tickerScroll1{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+@keyframes tickerScroll2{0%{transform:translateX(-50%)}100%{transform:translateX(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+
+/* ── TICKER TAPE ── */
 .pie-wrap{display:flex;align-items:center;gap:24px;flex-wrap:wrap;}
 .pie-canvas-wrap{flex-shrink:0;}
 .pie-legend{display:flex;flex-direction:column;gap:8px;flex:1;min-width:160px;}
@@ -321,56 +348,28 @@ tr:hover td{background:rgba(0,212,170,0.03);}
   <div class="tv-container" id="tvContainer"></div>
 </div>
 
-<!-- SET MARKET OVERVIEW -->
-<div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
-  <span>ภาพรวมตลาด</span>
-  <span style="font-size:0.62rem;color:var(--text3);font-family:'Space Mono',monospace;">TradingView Live</span>
-</div>
-<div class="holdings-wrap" style="padding:0;overflow:hidden;margin-bottom:24px;">
-  <!-- TradingView Market Overview Widget (official embed) -->
-  <div class="tradingview-widget-container" id="tv-market-overview">
-    <div class="tradingview-widget-container__widget"></div>
+<!-- ═══════════════════════════════════════════════════ -->
+<!-- TICKER TAPE — แถบ 1: ราคาหุ้น real-time (ทุกคน)  -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="ticker-wrap" id="tickerWrap1">
+  <div class="ticker-label">📊 LIVE</div>
+  <div class="ticker-track" id="tickerTrack1">
+    <div class="ticker-inner" id="tickerInner1">
+      <span class="ticker-loading">กำลังโหลดราคา...</span>
+    </div>
   </div>
-  <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-market-overview.js" async>
-  {
-    "colorTheme": "dark",
-    "dateRange": "12M",
-    "showChart": true,
-    "locale": "th",
-    "largeChartUrl": "",
-    "isTransparent": true,
-    "showSymbolLogo": true,
-    "showFloatingTooltip": false,
-    "width": "100%",
-    "height": "400",
-    "tabs": [
-      {
-        "title": "ดัชนีโลก",
-        "symbols": [
-          {"s": "SET:SET", "d": "SET Index"},
-          {"s": "NASDAQ:NDX", "d": "Nasdaq 100"},
-          {"s": "SP:SPX", "d": "S&P 500"},
-          {"s": "TVC:DJI", "d": "Dow Jones"},
-          {"s": "TVC:GOLD", "d": "Gold"},
-          {"s": "FX:USDTHB", "d": "USD/THB"}
-        ],
-        "originalTitle": "Indices"
-      },
-      {
-        "title": "หุ้น US",
-        "symbols": [
-          {"s": "NASDAQ:NVDA", "d": "NVIDIA"},
-          {"s": "NASDAQ:MU", "d": "Micron"},
-          {"s": "NYSE:WDC", "d": "Western Digital"},
-          {"s": "NYSE:STX", "d": "Seagate"},
-          {"s": "NYSE:V", "d": "Visa"},
-          {"s": "NASDAQ:ALAB", "d": "Astera Labs"}
-        ],
-        "originalTitle": "Stocks"
-      }
-    ]
-  }
-  </script>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- TICKER TAPE — แถบ 2: AI แนะนำ (Premium เท่านั้น)          -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<div class="ticker-wrap ticker-wrap-2" id="tickerWrap2" style="display:none;">
+  <div class="ticker-label ticker-label-2">⭐ AI</div>
+  <div class="ticker-track" id="tickerTrack2">
+    <div class="ticker-inner ticker-inner-2" id="tickerInner2">
+      <span class="ticker-loading">กำลังโหลดคำแนะนำ...</span>
+    </div>
+  </div>
 </div>
 
 <!-- PORTFOLIO PIE CHART -->
@@ -669,6 +668,7 @@ onAuthStateChanged(auth, async (user) => {
     }
     if(lastNewsTime>0&&newsCache.length){ renderNews(); startNewsCountdown(); }
     if(getKey()) setupAutoSchedule();
+    startTickerUpdates();
     setInterval(async()=>{
       if(!holdings.length)return;
       await fetchFXRate();
@@ -1088,7 +1088,175 @@ function startNewsCountdown(){ if(newsCountdown)clearInterval(newsCountdown); ne
 function setupAutoSchedule(){ if(autoTimer)clearInterval(autoTimer); const s=getSchedule(); document.getElementById('autoBadge').style.display='inline-flex'; autoTimer=setInterval(()=>{ const now=new Date(); const hhmm=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0'); if(hhmm===s.morning||hhmm===s.evening){ showToast('⏰ เริ่มวิเคราะห์อัตโนมัติ...'); refreshPrices().then(()=>analyzeAll()); } const el=document.getElementById('nextAutoUpdate'); if(el) el.textContent=`Auto: ${s.morning} & ${s.evening}`; },60000); document.getElementById('nextAutoUpdate').textContent=`Auto: ${s.morning} & ${s.evening}`; }
 
 
-// ── PORTFOLIO PIE CHART ──
+
+// ── TICKER TAPE ──
+// watchlist 30 ตัว fixed
+const TICKER_WATCHLIST = [
+  // Magnificent 7
+  {s:'AAPL',n:'Apple'},{s:'MSFT',n:'Microsoft'},{s:'GOOGL',n:'Google'},
+  {s:'META',n:'Meta'},{s:'AMZN',n:'Amazon'},{s:'TSLA',n:'Tesla'},{s:'NVDA',n:'NVIDIA'},
+  // Semiconductor
+  {s:'MU',n:'Micron'},{s:'AMD',n:'AMD'},{s:'INTC',n:'Intel'},
+  {s:'AVGO',n:'Broadcom'},{s:'QCOM',n:'Qualcomm'},{s:'ALAB',n:'Astera Labs'},
+  {s:'STX',n:'Seagate'},{s:'WDC',n:'West Digital'},
+  // Finance
+  {s:'V',n:'Visa'},{s:'MA',n:'Mastercard'},{s:'JPM',n:'JPMorgan'},
+  // Tech อื่น
+  {s:'NFLX',n:'Netflix'},{s:'DIS',n:'Disney'},{s:'PYPL',n:'PayPal'},
+  // EV
+  {s:'RIVN',n:'Rivian'},{s:'NIO',n:'NIO'},
+  // ETF/Index
+  {s:'QQQ',n:'Nasdaq ETF'},{s:'SPY',n:'S&P500 ETF'},
+  // Crypto adjacent
+  {s:'COIN',n:'Coinbase'},
+  // Commodity
+  {s:'GLD',n:'Gold ETF'},
+  // Others
+  {s:'UBER',n:'Uber'},{s:'ABNB',n:'Airbnb'},{s:'SNOW',n:'Snowflake'}
+];
+
+let tickerPrices = {};
+let tickerTimer = null;
+let tickerApiFailCount = 0;
+
+async function fetchTickerBatch(symbols) {
+  // Twelve Data batch — symbols คั่นด้วย comma
+  const joined = symbols.join(',');
+  try {
+    const res = await fetch(
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(joined)}&apikey=${TD_KEY}`,
+      { signal: AbortSignal.timeout(15000) }
+    );
+    const data = await res.json();
+    if (data.status === 'error') { tickerApiFailCount++; return; }
+    tickerApiFailCount = 0;
+    // ถ้า 1 symbol จะได้ object ตรง, หลาย symbol จะได้ object ของ objects
+    const entries = symbols.length === 1 ? { [symbols[0]]: data } : data;
+    Object.entries(entries).forEach(([sym, q]) => {
+      if (!q || q.status === 'error' || !q.close) return;
+      const cur = parseFloat(q.close);
+      const prev = parseFloat(q.previous_close) || cur;
+      tickerPrices[sym] = {
+        price: cur,
+        change: cur - prev,
+        changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0
+      };
+    });
+  } catch(e) {
+    tickerApiFailCount++;
+    console.warn('Ticker batch error:', e.message);
+  }
+}
+
+function buildTickerItem(sym, name) {
+  const p = tickerPrices[sym] || prices[sym];
+  if (!p) return '';
+  const price = p.price ?? p.current;
+  const pct = p.changePct ?? 0;
+  const cls = pct > 0 ? 'ticker-up' : pct < 0 ? 'ticker-down' : 'ticker-neu';
+  const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '◆';
+  const fmtPrice = price >= 1000
+    ? '$' + price.toLocaleString('en-US', {maximumFractionDigits:2})
+    : '$' + price.toFixed(2);
+  return `<span class="ticker-item">
+    <span class="ticker-sym">${sym}</span>
+    <span class="ticker-price">${fmtPrice}</span>
+    <span class="${cls}">${arrow} ${Math.abs(pct).toFixed(2)}%</span>
+  </span>`;
+}
+
+function renderTicker1() {
+  const inner = document.getElementById('tickerInner1');
+  if (!inner) return;
+  // รวม watchlist + holdings ที่มีราคาแล้ว
+  const holdingSyms = holdings.map(h => ({ s: h.ticker, n: h.name || h.ticker }));
+  const watchAll = [...TICKER_WATCHLIST];
+  holdingSyms.forEach(h => { if (!watchAll.find(w => w.s === h.s)) watchAll.push(h); });
+
+  const items = watchAll
+    .map(w => buildTickerItem(w.s, w.n))
+    .filter(Boolean)
+    .join('');
+
+  if (!items) { inner.innerHTML = '<span class="ticker-loading">รอราคา...</span>'; return; }
+
+  // duplicate เพื่อให้วนต่อเนื่อง
+  inner.innerHTML = items + items;
+
+  // ปรับความเร็วตามจำนวน items
+  const count = watchAll.filter(w => tickerPrices[w.s] || prices[w.s]).length;
+  const duration = Math.max(40, count * 3);
+  inner.style.animationDuration = duration + 's';
+}
+
+async function loadTickerData() {
+  if (tickerApiFailCount >= 3) {
+    // quota หมดหรือ error ซ้ำ หยุดโหลดแต่ ticker ยังเลื่อน
+    console.warn('Ticker: API fail, stop updating');
+    return;
+  }
+  // แบ่ง batch ครั้งละ 8 (Twelve Data free batch limit)
+  const allSyms = TICKER_WATCHLIST.map(w => w.s);
+  // เพิ่ม holdings ที่ไม่อยู่ใน watchlist
+  holdings.forEach(h => { if (!allSyms.includes(h.ticker) && h.type === 'US') allSyms.push(h.ticker); });
+
+  for (let i = 0; i < allSyms.length; i += 8) {
+    const batch = allSyms.slice(i, i + 8);
+    await fetchTickerBatch(batch);
+    await sleep(500);
+  }
+  renderTicker1();
+}
+
+function renderTicker2() {
+  // แถบ 2: ใช้ข้อมูลจาก Firestore recommendations (analysisRec)
+  if (!isPremium()) { document.getElementById('tickerWrap2').style.display = 'none'; return; }
+  document.getElementById('tickerWrap2').style.display = 'flex';
+  const inner = document.getElementById('tickerInner2');
+  if (!inner) return;
+
+  // ดึง recommendations จาก Firestore (เก็บโดย analyze.js)
+  if (!window._tickerRecs || !window._tickerRecs.length) {
+    inner.innerHTML = '<span class="ticker-loading" style="color:rgba(247,201,72,0.5)">⭐ AI กำลังวิเคราะห์... รอผล 08:00 น.</span>';
+    return;
+  }
+
+  const items = window._tickerRecs.map(r => `
+    <span class="ticker-rec">
+      <span class="ticker-rec-sym">${r.ticker}</span>
+      <span class="ticker-rec-action">🟢 ซื้อได้</span>
+      <span class="ticker-rec-price">เข้าที่ ${r.entryZone}</span>
+      <span class="ticker-rec-reason">· ${r.reason}</span>
+    </span>`).join('');
+
+  const noRec = `<span class="ticker-rec"><span style="color:rgba(247,201,72,0.5);font-size:0.7rem;">⭐ ไม่มีหุ้นแนะนำวันนี้ — ตลาดยังไม่เหมาะซื้อ</span></span>`;
+
+  inner.innerHTML = (items || noRec) + (items || noRec);
+}
+
+async function loadTickerRecs() {
+  if (!isPremium() || !currentUser) return;
+  try {
+    const snap = await getDoc(doc(db, 'marketData', 'recommendations'));
+    if (snap.exists()) {
+      window._tickerRecs = snap.data().recs || [];
+      renderTicker2();
+    }
+  } catch(e) { console.warn('Ticker recs:', e.message); }
+}
+
+function startTickerUpdates() {
+  // โหลดครั้งแรก
+  loadTickerData();
+  loadTickerRecs();
+  // อัปเดตทุก 5 นาที
+  if (tickerTimer) clearInterval(tickerTimer);
+  tickerTimer = setInterval(() => {
+    loadTickerData();
+  }, 5 * 60 * 1000);
+}
+
+
 function renderPieChart(){
   const section = document.getElementById('pieSection');
   if(!section) return;
