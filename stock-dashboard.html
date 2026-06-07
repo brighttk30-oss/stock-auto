@@ -1121,9 +1121,10 @@ let tickerPrices = {};
 let tickerTimer = null;
 let tickerApiFailCount = 0;
 
-// ดึงราคาทีละ 1 symbol (free plan ไม่รองรับ batch)
+// ดึงราคาทีละ 1 symbol (Twelve Data free: 8 req/min)
 async function fetchTickerSingle(sym) {
   try {
+    // ใช้ /quote ให้ได้ทั้ง price และ previous_close สำหรับ % change
     const res = await fetch(
       `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(sym)}&apikey=${TD_KEY}`,
       { signal: AbortSignal.timeout(10000) }
@@ -1137,19 +1138,18 @@ async function fetchTickerSingle(sym) {
       change: cur - prev,
       changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0
     };
-  } catch(e) { /* ข้ามถ้า error */ }
+  } catch(e) { /* ข้ามถ้า timeout */ }
 }
 
-// ดึงหลายตัวพร้อมกันแบบ parallel แต่จำกัด concurrency
-async function fetchTickerParallel(symbols, concurrency = 4) {
-  const results = [];
-  for (let i = 0; i < symbols.length; i += concurrency) {
-    const batch = symbols.slice(i, i + concurrency);
-    await Promise.all(batch.map(s => fetchTickerSingle(s)));
-    renderTicker1(); // render ทันทีทุก wave
-    if (i + concurrency < symbols.length) await sleep(600);
+// ดึงทีละตัว หน่วง 1 วินาที (60 req/min แต่ free plan อยู่ที่ 8 req/min จริงๆ)
+// ดังนั้นหน่วง 8 วินาที = ปลอดภัย 100%
+// แต่ใช้ 8s × 30 ตัว = 4 นาทีโหลดครบ — แสดงทีละตัวระหว่างนั้น
+async function fetchTickerParallel(symbols) {
+  for (let i = 0; i < symbols.length; i++) {
+    await fetchTickerSingle(symbols[i]);
+    renderTicker1(); // update แถบทันทีทุกตัว ทำให้เห็นทยอยขึ้น
+    if (i < symbols.length - 1) await sleep(8000); // 8s = 7-8 req/min ปลอดภัย
   }
-  return results;
 }
 
 function buildTickerItem(sym, name) {
@@ -1194,15 +1194,14 @@ function renderTicker1() {
 }
 
 async function loadTickerData() {
-  // รวม watchlist + holdings ที่ไม่อยู่ใน watchlist
   const allSyms = [...TICKER_WATCHLIST.map(w => w.s)];
   holdings.forEach(h => {
     if (h.type === 'US' && !allSyms.includes(h.ticker)) allSyms.push(h.ticker);
   });
 
-  // แสดงราคาพอร์ตทันทีก่อน (ไม่รอ watchlist)
+  // Step 1: เอาราคาพอร์ตที่มีอยู่แล้วมาแสดงทันที
   holdings.forEach(h => {
-    if (prices[h.ticker] && !tickerPrices[h.ticker]) {
+    if (prices[h.ticker]) {
       tickerPrices[h.ticker] = {
         price: prices[h.ticker].current,
         change: prices[h.ticker].change || 0,
@@ -1210,13 +1209,10 @@ async function loadTickerData() {
       };
     }
   });
-  renderTicker1();
+  renderTicker1(); // แสดงทันทีก่อน
 
-  // ดึง watchlist ทั้งหมด 4 ตัวพร้อมกัน หน่วง 600ms ระหว่าง wave
-  // 30 ตัว / 4 = ~8 waves × 600ms = ~5 วินาทีโหลดครบ
-  // ใช้ ~30 req per update, ทุก 5 นาที = 6 req/ชั่วโมง × 30 = 180 req/ชั่วโมง
-  // เปิด 4 ชั่วโมง/วัน = 720 req ยังอยู่ใน 800 limit
-  await fetchTickerParallel(allSyms, 4);
+  // Step 2: fetch watchlist ทีละตัว 2 วินาที ทยอยขึ้นแถบ
+  await fetchTickerParallel(allSyms);
 }
 
 function renderTicker2() {
