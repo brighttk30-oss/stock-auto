@@ -37,7 +37,26 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .auth-error{background:rgba(255,77,109,0.1);border:1px solid rgba(255,77,109,0.3);border-radius:8px;padding:10px 14px;font-size:0.78rem;color:var(--red);margin-bottom:14px;display:none;}
 .auth-error.show{display:block;}
 
-/* PLAN BADGE */
+/* PIE CHART */
+.pie-wrap{display:flex;align-items:center;gap:24px;flex-wrap:wrap;}
+.pie-canvas-wrap{flex-shrink:0;}
+.pie-legend{display:flex;flex-direction:column;gap:8px;flex:1;min-width:160px;}
+.pie-legend-item{display:flex;align-items:center;gap:8px;font-size:0.78rem;}
+.pie-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+.pie-legend-name{color:var(--text);flex:1;}
+.pie-legend-pct{color:var(--text2);font-family:'Space Mono',monospace;font-size:0.72rem;}
+/* ALERT */
+.alert-item{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--surface2);border-radius:8px;margin-bottom:8px;border:1px solid var(--border);}
+.alert-item.triggered{border-color:rgba(0,212,170,0.4);background:rgba(0,212,170,0.05);}
+.alert-ticker{font-family:'Space Mono',monospace;font-weight:700;color:var(--accent);font-size:0.82rem;}
+.alert-detail{font-size:0.72rem;color:var(--text2);margin-top:2px;}
+/* DIVIDEND */
+.div-item{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--surface2);border-radius:8px;margin-bottom:8px;border:1px solid var(--border);}
+.div-ticker{font-family:'Space Mono',monospace;font-weight:700;color:var(--gold);font-size:0.82rem;}
+.div-date{font-size:0.72rem;color:var(--text2);}
+.div-amount{font-family:'Space Mono',monospace;color:var(--green);font-size:0.82rem;font-weight:700;}
+
+
 .plan-badge{font-size:0.6rem;padding:2px 8px;border-radius:10px;font-family:'Space Mono',monospace;font-weight:700;letter-spacing:1px;}
 .plan-free{background:rgba(139,148,158,0.2);color:var(--text2);border:1px solid rgba(139,148,158,0.3);}
 .plan-premium{background:rgba(247,201,72,0.2);color:var(--gold);border:1px solid rgba(247,201,72,0.3);}
@@ -302,6 +321,52 @@ tr:hover td{background:rgba(0,212,170,0.03);}
   <div class="tv-container" id="tvContainer"></div>
 </div>
 
+<!-- SET MARKET OVERVIEW -->
+<div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+  <span>ภาพรวมตลาด</span>
+  <span style="font-size:0.62rem;color:var(--text3);font-family:'Space Mono',monospace;">TradingView Live</span>
+</div>
+<div class="holdings-wrap" style="padding:0;overflow:hidden;margin-bottom:24px;">
+  <!-- TradingView Market Overview Widget -->
+  <div class="tradingview-widget-container" style="height:400px;">
+    <iframe
+      scrolling="no"
+      allowtransparency="true"
+      frameborder="0"
+      style="display:block;width:100%;height:400px;border:none;"
+      src="https://www.tradingview.com/widgetembed/?frameElementId=tv_market&symbol=SET%3ASET&interval=D&hidesidetoolbar=1&symboledit=0&saveimage=0&toolbarbg=161b22&hideideas=1&theme=dark&style=1&timezone=Asia%2FBangkok&locale=th&utm_source=stockai">
+    </iframe>
+  </div>
+</div>
+
+<!-- PORTFOLIO PIE CHART -->
+<div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+  <span>สัดส่วนพอร์ต</span>
+  <button class="btn btn-outline btn-sm" onclick="exportCSV()">📥 Export CSV</button>
+</div>
+<div class="holdings-wrap" style="padding:16px;margin-bottom:24px;" id="pieSection">
+  <div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;">เพิ่มหุ้นก่อนเพื่อดูสัดส่วนพอร์ต</div>
+</div>
+
+<!-- DIVIDEND CALENDAR -->
+<div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+  <span>🗓 ปฏิทินปันผล <span style="font-size:0.6rem;color:var(--gold);font-family:'Space Mono',monospace;">PREMIUM</span></span>
+  <button class="btn btn-outline btn-sm" onclick="loadDividendCalendar()" id="divCalBtn">โหลดข้อมูล</button>
+</div>
+<div class="holdings-wrap" style="padding:16px;margin-bottom:24px;" id="divCalSection">
+  <div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;">กด "โหลดข้อมูล" เพื่อดูวันปันผลของหุ้นที่ถือ (Premium)</div>
+</div>
+
+<!-- PRICE ALERT -->
+<div class="section-title" style="display:flex;align-items:center;justify-content:space-between;">
+  <span>🔔 แจ้งเตือนราคา <span style="font-size:0.6rem;color:var(--gold);font-family:'Space Mono',monospace;">PREMIUM</span></span>
+  <button class="btn btn-outline btn-sm" onclick="openModal('alertModal')">+ ตั้งแจ้งเตือน</button>
+</div>
+<div class="holdings-wrap" style="padding:16px;margin-bottom:24px;" id="alertListSection">
+  <div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;" id="alertListEmpty">ยังไม่มีการแจ้งเตือน — กด "+ ตั้งแจ้งเตือน"</div>
+  <div id="alertList"></div>
+</div>
+
 <!-- AI SECTION -->
 <div class="section-title">AI วิเคราะห์</div>
 <div id="aiSection">
@@ -366,6 +431,31 @@ tr:hover td{background:rgba(0,212,170,0.03);}
       <div class="fg full"><label>หมายเหตุ (ไม่บังคับ)</label><textarea id="payNote" placeholder="ข้อความเพิ่มเติม"></textarea></div>
     </div>
     <div class="modal-actions"><button class="btn btn-outline btn-sm" onclick="closeModal('upgradeModal')">ยกเลิก</button><button class="btn btn-gold" onclick="submitPayment()">📩 แจ้งโอนเงิน</button></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="alertModal" onclick="closeModalOutside(event,'alertModal')">
+  <div class="modal">
+    <h3>🔔 ตั้งแจ้งเตือนราคา</h3>
+    <div style="font-size:0.75rem;color:var(--text2);margin-bottom:16px;">ระบบจะแจ้งเตือนผ่าน Browser Notification เมื่อราคาถึงเป้าหมาย</div>
+    <div class="form-grid">
+      <div class="fg"><label>หุ้น</label>
+        <select id="alertTicker"><option value="">เลือกหุ้น</option></select>
+      </div>
+      <div class="fg"><label>ประเภทแจ้งเตือน</label>
+        <select id="alertType">
+          <option value="above">ราคา ≥ เป้าหมาย (แจ้งเมื่อขึ้นถึง)</option>
+          <option value="below">ราคา ≤ เป้าหมาย (แจ้งเมื่อลงถึง)</option>
+        </select>
+      </div>
+      <div class="fg full"><label>ราคาเป้าหมาย (USD)</label>
+        <input type="number" id="alertPrice" placeholder="0.00" step="any" min="0">
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline btn-sm" onclick="closeModal('alertModal')">ยกเลิก</button>
+      <button class="btn" onclick="addPriceAlert()">🔔 ตั้งแจ้งเตือน</button>
+    </div>
   </div>
 </div>
 
@@ -809,15 +899,21 @@ function updateSummary(tv=0,tc=0,athDiff=0){
 // ── CHART ──
 window.selectTicker=async(ticker,type)=>{
   if(selectedTicker===ticker){closeChart();return;}
-  if(!isPremium()){ showToast('กราฟต้องการ Premium ครับ',true); return; }
+  // ✅ ทุกคนดูกราฟได้ ไม่ต้อง Premium (แต่ AI วิเคราะห์ยังล็อกอยู่)
   selectedTicker=ticker; renderHoldings();
   const panel=document.getElementById('chartPanel');
   panel.classList.add('show');
   setTimeout(()=>panel.scrollIntoView({behavior:'smooth',block:'nearest'}),100);
   document.getElementById('chartTickerLabel').textContent=ticker;
-  document.getElementById('resistValues').innerHTML='<span style="color:var(--text3);font-size:0.7rem;font-family:\'Space Mono\',monospace;">คำนวณ...</span>';
-  document.getElementById('supportValues').innerHTML='<span style="color:var(--text3);font-size:0.7rem;font-family:\'Space Mono\',monospace;">คำนวณ...</span>';
-  document.getElementById('srAIText').textContent='--';
+  // แสดง SR bar ตามสิทธิ์
+  if(isPremium()){
+    document.getElementById('chartSR').style.display='flex';
+    document.getElementById('resistValues').innerHTML='<span style="color:var(--text3);font-size:0.7rem;font-family:\'Space Mono\',monospace;">คำนวณ...</span>';
+    document.getElementById('supportValues').innerHTML='<span style="color:var(--text3);font-size:0.7rem;font-family:\'Space Mono\',monospace;">คำนวณ...</span>';
+    document.getElementById('srAIText').textContent='--';
+  } else {
+    document.getElementById('chartSR').style.display='none';
+  }
   const tvSym=type==='GOLD'?'COMEX:GC1!':type==='FX'?'FOREX:USDTHB':ticker;
   const tvDiv=document.getElementById('tvContainer'); tvDiv.innerHTML='';
   // Use TradingView iframe embed - works on all hosts
@@ -837,7 +933,7 @@ window.selectTicker=async(ticker,type)=>{
     scrolling="no"
     allowfullscreen
   ></iframe>`;
-  calcSR(ticker);
+  if(isPremium()) calcSR(ticker);
 };
 window.closeChart=()=>{ selectedTicker=null; document.getElementById('chartPanel').classList.remove('show'); document.getElementById('tvContainer').innerHTML=''; renderHoldings(); };
 function calcSR(ticker){
@@ -956,6 +1052,202 @@ function startNewsCountdown(){ if(newsCountdown)clearInterval(newsCountdown); ne
 
 // ── AUTO SCHEDULE ──
 function setupAutoSchedule(){ if(autoTimer)clearInterval(autoTimer); const s=getSchedule(); document.getElementById('autoBadge').style.display='inline-flex'; autoTimer=setInterval(()=>{ const now=new Date(); const hhmm=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0'); if(hhmm===s.morning||hhmm===s.evening){ showToast('⏰ เริ่มวิเคราะห์อัตโนมัติ...'); refreshPrices().then(()=>analyzeAll()); } const el=document.getElementById('nextAutoUpdate'); if(el) el.textContent=`Auto: ${s.morning} & ${s.evening}`; },60000); document.getElementById('nextAutoUpdate').textContent=`Auto: ${s.morning} & ${s.evening}`; }
+
+
+// ── PORTFOLIO PIE CHART ──
+function renderPieChart(){
+  const section = document.getElementById('pieSection');
+  if(!section) return;
+  if(!holdings.length){
+    section.innerHTML='<div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;">เพิ่มหุ้นก่อนเพื่อดูสัดส่วนพอร์ต</div>';
+    return;
+  }
+  // คำนวณมูลค่าแต่ละตัว
+  const data = holdings.map(h=>{
+    const p = prices[h.ticker];
+    const val = p ? h.qty * p.current : h.qty * h.buyPrice;
+    return { ticker: h.ticker, type: h.type, val };
+  }).filter(d=>d.val>0);
+  if(!data.length){ section.innerHTML='<div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;">รอราคาโหลดก่อน</div>'; return; }
+  const total = data.reduce((s,d)=>s+d.val,0);
+  const colors = ['#00d4aa','#f7c948','#58a6ff','#bc8cff','#ff9f43','#ff4d6d','#26c6da','#66bb6a','#ff7043','#ab47bc'];
+  const typeColors = { US:'#58a6ff', GOLD:'#f7c948', CRYPTO:'#bc8cff', FX:'#00d4aa' };
+  // วาด SVG pie
+  const size = 160, cx = 80, cy = 80, r = 70, ri = 40;
+  let startAngle = -Math.PI/2;
+  let slices = '';
+  data.forEach((d,i)=>{
+    const angle = (d.val/total) * Math.PI * 2;
+    const endAngle = startAngle + angle;
+    const x1=cx+r*Math.cos(startAngle), y1=cy+r*Math.sin(startAngle);
+    const x2=cx+r*Math.cos(endAngle), y2=cy+r*Math.sin(endAngle);
+    const xi1=cx+ri*Math.cos(startAngle), yi1=cy+ri*Math.sin(startAngle);
+    const xi2=cx+ri*Math.cos(endAngle), yi2=cy+ri*Math.sin(endAngle);
+    const large = angle > Math.PI ? 1 : 0;
+    const col = typeColors[d.type] || colors[i % colors.length];
+    slices += `<path d="M${xi1},${yi1} L${x1},${y1} A${r},${r} 0 ${large},1 ${x2},${y2} L${xi2},${yi2} A${ri},${ri} 0 ${large},0 ${xi1},${yi1}" fill="${col}" opacity="0.85" stroke="var(--bg)" stroke-width="1.5"/>`;
+    startAngle = endAngle;
+  });
+  const legend = data.map((d,i)=>{
+    const col = typeColors[d.type] || colors[i % colors.length];
+    const pct = (d.val/total*100).toFixed(1);
+    return `<div class="pie-legend-item"><div class="pie-dot" style="background:${col}"></div><span class="pie-legend-name">${d.ticker}</span><span class="pie-legend-pct">${pct}%</span></div>`;
+  }).join('');
+  section.innerHTML = `
+    <div class="pie-wrap">
+      <div class="pie-canvas-wrap">
+        <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${slices}
+          <text x="${cx}" y="${cy+5}" text-anchor="middle" fill="var(--text2)" font-size="10" font-family="Space Mono">พอร์ต</text>
+        </svg>
+      </div>
+      <div class="pie-legend">${legend}</div>
+    </div>`;
+}
+
+// ── EXPORT CSV ──
+window.exportCSV = () => {
+  if(!holdings.length){ showToast('ยังไม่มีข้อมูลพอร์ต',true); return; }
+  const rows = [['Ticker','ประเภท','จำนวน','ราคาซื้อ (USD)','ราคาปัจจุบัน (USD)','มูลค่า (USD)','กำไร/ขาดทุน (USD)','% เปลี่ยน','52W High','ห่างจาก ATH (%)']];
+  holdings.forEach(h=>{
+    const p = prices[h.ticker];
+    const cost = h.qty * h.buyPrice;
+    const curr = p ? h.qty * p.current : 0;
+    const pl = p ? curr - cost : 0;
+    const plPct = cost > 0 ? (pl/cost*100).toFixed(2) : '0';
+    const ath52 = p?.high52 || 0;
+    const athPct = p && ath52 > 0 ? ((ath52-p.current)/ath52*100).toFixed(1) : '0';
+    rows.push([
+      h.ticker, h.type, h.qty, h.buyPrice.toFixed(2),
+      p ? p.current.toFixed(2) : '',
+      p ? curr.toFixed(2) : '',
+      p ? pl.toFixed(2) : '',
+      plPct,
+      p && ath52 > 0 ? ath52.toFixed(2) : '',
+      athPct
+    ]);
+  });
+  const csv = rows.map(r=>r.join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `portfolio_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('✅ Export CSV เรียบร้อย');
+};
+
+// ── DIVIDEND CALENDAR ──
+window.loadDividendCalendar = async () => {
+  if(!isPremium()){ openModal('upgradeModal'); return; }
+  const section = document.getElementById('divCalSection');
+  const key = getKey();
+  if(!key){ showToast('ใส่ OpenRouter Key ก่อน ⚙',true); openSettings(); return; }
+  if(!holdings.length){ section.innerHTML='<div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;">เพิ่มหุ้นก่อน</div>'; return; }
+  section.innerHTML='<div style="text-align:center;color:var(--text2);font-size:0.78rem;padding:20px;"><div style="display:inline-block;width:13px;height:13px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin-right:8px;vertical-align:middle;"></div>กำลังโหลดปฏิทินปันผล...</div>';
+  const tickers = holdings.filter(h=>h.type==='US').map(h=>h.ticker);
+  if(!tickers.length){ section.innerHTML='<div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;">มีเฉพาะหุ้น US ที่รองรับปฏิทินปันผล</div>'; return; }
+  const prompt = `ข้อมูลปันผลล่าสุดของหุ้น: ${tickers.join(', ')}
+ตอบ JSON array เท่านั้น (ไม่มี markdown):
+[{"ticker":"X","divPerShare":"$0.00","exDate":"DD/MM/YYYY","payDate":"DD/MM/YYYY","frequency":"Quarterly หรือ Annual หรือ Monthly","yield":"X.X%"}]
+ถ้าไม่มีปันผลให้ใส่ null ใน divPerShare`;
+  try {
+    const text = await callAI(key, prompt, 800);
+    const clean = text.replace(/```json|```/g,'').trim();
+    const arr = JSON.parse(clean);
+    if(!arr.length){ section.innerHTML='<div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;">ไม่พบข้อมูลปันผล</div>'; return; }
+    section.innerHTML = arr.filter(d=>d.divPerShare).map(d=>`
+      <div class="div-item">
+        <div>
+          <div class="div-ticker">${d.ticker}</div>
+          <div class="div-date">Ex-Date: ${d.exDate || '--'} | Pay: ${d.payDate || '--'}</div>
+          <div class="div-date">${d.frequency || ''} | Yield: ${d.yield || '--'}</div>
+        </div>
+        <div class="div-amount">${d.divPerShare}</div>
+      </div>`).join('') || '<div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;">ไม่มีหุ้นในพอร์ตที่จ่ายปันผล</div>';
+  } catch(e) {
+    section.innerHTML = `<div style="color:var(--red);font-size:0.78rem;padding:10px;">⚠️ ${e.message}</div>`;
+  }
+};
+
+// ── PRICE ALERT ──
+let priceAlerts = JSON.parse(localStorage.getItem('price_alerts') || '[]');
+
+function saveAlerts(){ localStorage.setItem('price_alerts', JSON.stringify(priceAlerts)); }
+
+function renderAlerts(){
+  const list = document.getElementById('alertList');
+  const empty = document.getElementById('alertListEmpty');
+  if(!list) return;
+  if(!priceAlerts.length){ if(empty) empty.style.display='block'; list.innerHTML=''; return; }
+  if(empty) empty.style.display='none';
+  list.innerHTML = priceAlerts.map((a,i)=>`
+    <div class="alert-item ${a.triggered?'triggered':''}">
+      <div>
+        <div class="alert-ticker">${a.ticker} ${a.triggered?'✅ แจ้งแล้ว':''}</div>
+        <div class="alert-detail">${a.type==='above'?'ราคา ≥':'ราคา ≤'} $${a.targetPrice} | ตั้งเมื่อ ${a.setAt}</div>
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="removeAlert(${i})">ลบ</button>
+    </div>`).join('');
+}
+
+window.addPriceAlert = () => {
+  if(!isPremium()){ openModal('upgradeModal'); return; }
+  const ticker = document.getElementById('alertTicker').value;
+  const type = document.getElementById('alertType').value;
+  const price = parseFloat(document.getElementById('alertPrice').value);
+  if(!ticker || isNaN(price) || price <= 0){ showToast('กรอกข้อมูลให้ครบ',true); return; }
+  // ขอ permission notification
+  if('Notification' in window && Notification.permission === 'default'){
+    Notification.requestPermission();
+  }
+  priceAlerts.push({ ticker, type, targetPrice: price, triggered: false, setAt: new Date().toLocaleString('th-TH') });
+  saveAlerts(); renderAlerts(); closeModal('alertModal');
+  document.getElementById('alertPrice').value = '';
+  showToast(`✅ ตั้งแจ้งเตือน ${ticker} ${type==='above'?'≥':'≤'} $${price}`);
+};
+
+window.removeAlert = (idx) => {
+  priceAlerts.splice(idx, 1); saveAlerts(); renderAlerts();
+};
+
+function checkPriceAlerts(){
+  if(!priceAlerts.length) return;
+  let triggered = false;
+  priceAlerts.forEach(a=>{
+    if(a.triggered) return;
+    const p = prices[a.ticker];
+    if(!p) return;
+    const hit = a.type==='above' ? p.current >= a.targetPrice : p.current <= a.targetPrice;
+    if(hit){
+      a.triggered = true; triggered = true;
+      const msg = `${a.ticker} ราคา $${p.current.toFixed(2)} ${a.type==='above'?'≥':'≤'} เป้าหมาย $${a.targetPrice}`;
+      showToast(`🔔 ${msg}`);
+      if('Notification' in window && Notification.permission === 'granted'){
+        new Notification('StockAI แจ้งเตือนราคา', { body: msg, icon: '/favicon.ico' });
+      }
+    }
+  });
+  if(triggered){ saveAlerts(); renderAlerts(); }
+}
+
+function updateAlertTickerSelect(){
+  const sel = document.getElementById('alertTicker');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">เลือกหุ้น</option>' + holdings.map(h=>`<option value="${h.ticker}">${h.ticker}</option>`).join('');
+}
+
+// ── PATCH: hook renderHoldings ──
+// เก็บ function เดิมไว้ แล้ว wrap ใหม่ให้ run pie + alerts + alert select ด้วย
+const _origRenderHoldings = renderHoldings;
+window.renderHoldings = function(){
+  _origRenderHoldings();
+  renderPieChart();
+  checkPriceAlerts();
+  updateAlertTickerSelect();
+};
+
+// init ตอนเปิดหน้า
+renderAlerts();
 
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 window.showToast=(msg,isError=false)=>{ const t=document.getElementById('toast'); t.textContent=msg; t.className='toast show'+(isError?' error':''); setTimeout(()=>t.classList.remove('show'),3500); };
