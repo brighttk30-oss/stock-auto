@@ -703,6 +703,8 @@ function updateUserUI(){
   }
   else { badge.textContent='FREE'; badge.className='plan-badge plan-free'; }
   if(!isPremium()){ renderLockedAI(); }
+  // แสดง/ซ่อน แถบ 2 ตาม plan
+  setTimeout(() => renderTicker2(), 100);
 }
 
 function showTrialWarning(daysLeft){
@@ -1120,17 +1122,22 @@ let tickerTimer = null;
 let tickerApiFailCount = 0;
 
 async function fetchTickerBatch(symbols) {
-  // Twelve Data batch — symbols คั่นด้วย comma
-  const joined = symbols.join(',');
+  // Twelve Data รองรับ multi-symbol ด้วย comma ใน URL เดียว
+  // response: ถ้า 1 sym → object ตรง, หลาย sym → { SYM: {...}, SYM2: {...} }
+  const joined = symbols.map(s => encodeURIComponent(s)).join('%2C');
   try {
     const res = await fetch(
-      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(joined)}&apikey=${TD_KEY}`,
-      { signal: AbortSignal.timeout(15000) }
+      `https://api.twelvedata.com/quote?symbol=${joined}&apikey=${TD_KEY}`,
+      { signal: AbortSignal.timeout(20000) }
     );
     const data = await res.json();
-    if (data.status === 'error') { tickerApiFailCount++; return; }
+    // error ระดับ top-level
+    if (data.status === 'error' || data.code) {
+      tickerApiFailCount++;
+      console.warn('TwelveData batch error:', data.message || data.code);
+      return;
+    }
     tickerApiFailCount = 0;
-    // ถ้า 1 symbol จะได้ object ตรง, หลาย symbol จะได้ object ของ objects
     const entries = symbols.length === 1 ? { [symbols[0]]: data } : data;
     Object.entries(entries).forEach(([sym, q]) => {
       if (!q || q.status === 'error' || !q.close) return;
@@ -1142,6 +1149,7 @@ async function fetchTickerBatch(symbols) {
         changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0
       };
     });
+    console.log(`Ticker: loaded ${Object.keys(tickerPrices).length} prices`);
   } catch(e) {
     tickerApiFailCount++;
     console.warn('Ticker batch error:', e.message);
@@ -1191,58 +1199,97 @@ function renderTicker1() {
 
 async function loadTickerData() {
   if (tickerApiFailCount >= 3) {
-    // quota หมดหรือ error ซ้ำ หยุดโหลดแต่ ticker ยังเลื่อน
-    console.warn('Ticker: API fail, stop updating');
+    console.warn('Ticker: API fail x3, stop auto-update');
+    renderTicker1(); // render ด้วยของที่มีอยู่
     return;
   }
-  // แบ่ง batch ครั้งละ 8 (Twelve Data free batch limit)
-  const allSyms = TICKER_WATCHLIST.map(w => w.s);
-  // เพิ่ม holdings ที่ไม่อยู่ใน watchlist
-  holdings.forEach(h => { if (!allSyms.includes(h.ticker) && h.type === 'US') allSyms.push(h.ticker); });
 
-  for (let i = 0; i < allSyms.length; i += 8) {
-    const batch = allSyms.slice(i, i + 8);
+  // รวม watchlist + holdings ที่ไม่อยู่ใน watchlist
+  const allSyms = [...TICKER_WATCHLIST.map(w => w.s)];
+  holdings.forEach(h => {
+    if (h.type === 'US' && !allSyms.includes(h.ticker)) allSyms.push(h.ticker);
+  });
+
+  // ก่อนดึง watchlist ใหม่ — แสดงราคาจาก prices (พอร์ต) ก่อนเลย
+  holdings.forEach(h => {
+    if (prices[h.ticker] && !tickerPrices[h.ticker]) {
+      tickerPrices[h.ticker] = {
+        price: prices[h.ticker].current,
+        change: prices[h.ticker].change || 0,
+        changePct: prices[h.ticker].changePct || 0
+      };
+    }
+  });
+  renderTicker1(); // render ทันทีด้วยราคาพอร์ตก่อน
+
+  // ดึง watchlist แบบ batch ทีละ 10 symbols
+  // Twelve Data free: batch หลาย sym ได้ใน 1 request = ประหยัด quota มาก
+  for (let i = 0; i < allSyms.length; i += 10) {
+    const batch = allSyms.slice(i, i + 10);
     await fetchTickerBatch(batch);
-    await sleep(500);
+    renderTicker1(); // update ทันทีทุก batch
+    if (i + 10 < allSyms.length) await sleep(800); // หน่วง 0.8s ระหว่าง batch
   }
-  renderTicker1();
 }
 
 function renderTicker2() {
-  // แถบ 2: ใช้ข้อมูลจาก Firestore recommendations (analysisRec)
-  if (!isPremium()) { document.getElementById('tickerWrap2').style.display = 'none'; return; }
-  document.getElementById('tickerWrap2').style.display = 'flex';
+  const wrap = document.getElementById('tickerWrap2');
   const inner = document.getElementById('tickerInner2');
-  if (!inner) return;
+  if (!wrap || !inner) return;
 
-  // ดึง recommendations จาก Firestore (เก็บโดย analyze.js)
-  if (!window._tickerRecs || !window._tickerRecs.length) {
-    inner.innerHTML = '<span class="ticker-loading" style="color:rgba(247,201,72,0.5)">⭐ AI กำลังวิเคราะห์... รอผล 08:00 น.</span>';
+  if (!isPremium()) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'flex';
+
+  if (!window._tickerRecs) {
+    // ยังไม่โหลด → แสดง loading
+    inner.innerHTML = '<span class="ticker-loading" style="color:rgba(247,201,72,0.6)">⭐ กำลังโหลดคำแนะนำ AI...</span>';
     return;
   }
 
-  const items = window._tickerRecs.map(r => `
-    <span class="ticker-rec">
+  if (!window._tickerRecs.length) {
+    // โหลดแล้วแต่ไม่มี rec
+    const noRec = `<span class="ticker-rec"><span style="color:rgba(247,201,72,0.5);font-size:0.7rem;">⭐ ไม่มีหุ้นแนะนำวันนี้ · ตลาดยังไม่เหมาะซื้อ · รอ AI วิเคราะห์ 08:00 น.</span></span>`;
+    inner.innerHTML = noRec + noRec;
+    return;
+  }
+
+  const items = window._tickerRecs.map(r => {
+    const riskColor = r.risk === 'LOW' ? 'var(--green)' : r.risk === 'HIGH' ? 'var(--red)' : 'var(--gold)';
+    return `<span class="ticker-rec">
       <span class="ticker-rec-sym">${r.ticker}</span>
       <span class="ticker-rec-action">🟢 ซื้อได้</span>
-      <span class="ticker-rec-price">เข้าที่ ${r.entryZone}</span>
+      <span class="ticker-rec-price">เข้า ${r.entryZone}</span>
       <span class="ticker-rec-reason">· ${r.reason}</span>
-    </span>`).join('');
+      <span style="font-size:0.62rem;color:${riskColor};font-family:'Space Mono',monospace;">· ${r.risk} risk</span>
+    </span>`;
+  }).join('');
 
-  const noRec = `<span class="ticker-rec"><span style="color:rgba(247,201,72,0.5);font-size:0.7rem;">⭐ ไม่มีหุ้นแนะนำวันนี้ — ตลาดยังไม่เหมาะซื้อ</span></span>`;
+  inner.innerHTML = items + items; // duplicate เพื่อวนต่อเนื่อง
 
-  inner.innerHTML = (items || noRec) + (items || noRec);
+  // ปรับความเร็วตามจำนวน rec
+  const duration = Math.max(60, window._tickerRecs.length * 15);
+  inner.style.animationDuration = duration + 's';
 }
 
 async function loadTickerRecs() {
   if (!isPremium() || !currentUser) return;
+  window._tickerRecs = null; // reset เป็น loading state
+  renderTicker2(); // แสดง loading ก่อน
   try {
     const snap = await getDoc(doc(db, 'marketData', 'recommendations'));
     if (snap.exists()) {
-      window._tickerRecs = snap.data().recs || [];
-      renderTicker2();
+      const data = snap.data();
+      window._tickerRecs = data.recs || [];
+      window._tickerDate = data.date || '';
+      console.log(`Ticker recs: ${window._tickerRecs.length} stocks for ${window._tickerDate}`);
+    } else {
+      window._tickerRecs = []; // ไม่มีข้อมูล
     }
-  } catch(e) { console.warn('Ticker recs:', e.message); }
+  } catch(e) {
+    console.warn('Ticker recs error:', e.message);
+    window._tickerRecs = [];
+  }
+  renderTicker2();
 }
 
 function startTickerUpdates() {
