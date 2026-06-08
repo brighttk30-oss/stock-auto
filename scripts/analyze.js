@@ -186,9 +186,28 @@ async function analyzeUserPortfolios() {
         console.error(`    ❌ News:`, e.message);
       }
 
+      // บันทึก priceCache เพื่อให้ browser โหลดราคาได้ทันทีตอนเปิดหน้า
+      const priceCache = {};
+      holdings.forEach(h => {
+        if(priceMap[h.ticker]) {
+          const p = priceMap[h.ticker];
+          priceCache[h.ticker] = {
+            current: p.current,
+            prev: p.prev || p.current,
+            change: p.current - (p.prev || p.current),
+            changePct: p.changePct || 0,
+            high52: p.high52 || p.current,
+            low52: p.low52 || p.current,
+            dayHigh: p.current,
+            dayLow: p.current,
+            cachedAt: now.toISOString()
+          };
+        }
+      });
+
       // Save
       await db.doc(`users/${uid}/portfolio/main`).set({
-        holdings, aiCache, newsCache,
+        holdings, aiCache, newsCache, priceCache,
         lastNewsTime: Date.now(),
         autoUpdatedAt: now.toISOString()
       }, { merge: true });
