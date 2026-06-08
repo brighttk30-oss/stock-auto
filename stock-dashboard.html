@@ -770,30 +770,77 @@ onAuthStateChanged(auth, async (user) => {
     currentUser = user;
     document.getElementById('authScreen').classList.add('hidden');
     document.getElementById('appScreen').style.display = 'block';
-    // Load profile
-    const profSnap = await getDoc(doc(db,'users',user.uid,'profile','data'));
-    if(profSnap.exists()) userProfile = profSnap.data();
-    else {
-      // Auto create profile if not exists (Google login)
+
+    // ── STEP 1: โหลด Profile + Portfolio พร้อมกัน (parallel) ──
+    const [profSnap, portSnap] = await Promise.all([
+      getDoc(doc(db,'users',user.uid,'profile','data')),
+      getDoc(doc(db,'users',user.uid,'portfolio','main'))
+    ]);
+
+    // Process profile
+    if(profSnap.exists()) {
+      userProfile = profSnap.data();
+    } else {
+      // Auto create profile (Google login ครั้งแรก)
       const trialExpiry = Date.now() + 9*24*60*60*1000;
       userProfile = {name:user.displayName||'',email:user.email||'',plan:'trial',planExpiry:trialExpiry,createdAt:Date.now(),isAdmin:false};
-      await setDoc(doc(db,'users',user.uid), { email:user.email||'', name:user.displayName||'', createdAt:Date.now() });
-      await setDoc(doc(db,'users',user.uid,'profile','data'), userProfile);
+      setDoc(doc(db,'users',user.uid), { email:user.email||'', name:user.displayName||'', createdAt:Date.now() }); // non-await
+      setDoc(doc(db,'users',user.uid,'profile','data'), userProfile); // non-await
     }
+
+    // Process portfolio + priceCache
+    if(portSnap.exists()){
+      const data = portSnap.data();
+      holdings = data.holdings||[];
+      aiCache = data.aiCache||{};
+      newsCache = data.newsCache||[];
+      lastNewsTime = data.lastNewsTime||0;
+      // โหลด priceCache ทันที → เห็นราคาก่อน fetch จริง
+      const priceCache = data.priceCache||{};
+      Object.entries(priceCache).forEach(([ticker,p])=>{
+        if(p?.current){
+          prices[ticker] = p;
+          _quoteCache[ticker] = {close:String(p.current),previous_close:String(p.prev||p.current),high:String(p.dayHigh||p.current),low:String(p.dayLow||p.current)};
+          _quoteCacheTime[ticker] = Date.now();
+        }
+      });
+      if(Object.keys(priceCache).length) console.log(`[Cache] ${Object.keys(priceCache).length} prices from Firestore`);
+    }
+
+    // ── STEP 2: render ทันทีด้วย priceCache ──
     updateUserUI();
-    await initUserData();          // โหลด holdings จาก Firestore
-    await syncGuestToFirestore();  // sync guest holdings ถ้ามี
-    await fetchFXRate();
-    // reset premium state tracker เพื่อให้ hook render AI ถูกต้อง
     _lastPremiumState = null;
-    renderHoldings(); // แสดงทันที (มี priceCache แล้ว = เห็นราคาเลย)
-    if(holdings.length) fetchAllPrices(); // background refresh ราคาใหม่
+    renderHoldings(); // แสดงทันที — user เห็นราคาเก่าจาก cache ก่อน
+
+    // ── STEP 3: subscribe realtime + fetch ข้อมูลสด (background) ──
+    // subscribe portfolio realtime
+    if(dbUnsubscribe) dbUnsubscribe();
+    dbUnsubscribe = onSnapshot(doc(db,'users',user.uid,'portfolio','main'), (snap)=>{
+      if(snap.exists()){
+        const data = snap.data();
+        holdings = data.holdings||[];
+        aiCache = data.aiCache||{};
+        newsCache = data.newsCache||[];
+        lastNewsTime = data.lastNewsTime||0;
+        renderHoldings();
+        if(userProfile && isPremium()){ renderAICards(); if(newsCache.length) renderNews(); }
+      }
+    }, (err)=>console.warn('onSnapshot error:', err.message));
+
+    // fetch FX + ราคาสด (background ไม่รอ)
+    fetchFXRate().then(()=>{ if(holdings.length) fetchAllPrices(); });
+
+    // render AI
     if(isPremium()){
       renderAICards();
-      if(lastNewsTime > 0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+      if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
     } else {
       renderLockedAI();
     }
+
+    // sync guest (non-blocking ไม่รอ)
+    syncGuestToFirestore().catch(e=>console.warn('sync guest:', e.message));
+
     if(getKey()) setupAutoSchedule();
     startTickerUpdates();
     startCentralRefresh();
@@ -807,11 +854,14 @@ onAuthStateChanged(auth, async (user) => {
     const saved = localStorage.getItem('guest_holdings');
     holdings = saved ? JSON.parse(saved) : [];
     updateGuestUI();
-    await fetchFXRate();
-    _lastPremiumState = null; // reset
-    renderHoldings(); // skeleton ทันที
-    renderLockedAI(); // แสดง lock/teaser ทันที
-    if(holdings.length) fetchAllPrices(); // non-blocking
+    _lastPremiumState = null;
+    renderHoldings(); // แสดงทันที
+    renderLockedAI();
+    // fetch FX + ราคา background
+    fetchFXRate().then(() => {
+      renderHoldings();
+      if(holdings.length) fetchAllPrices();
+    });
     startTickerUpdates();
     startCentralRefresh();
   }
@@ -879,57 +929,22 @@ function renderLockedAI(){
 }
 
 // ── FIRESTORE USER DATA ──
+// initUserData ยังคงไว้สำหรับ backward compat
+// แต่ login flow ใหม่ทำทุกอย่างใน onAuthStateChanged แล้ว
 async function initUserData(){
   if(!currentUser) return;
-  const docRef = doc(db,'users',currentUser.uid,'portfolio','main');
+  // subscribe เท่านั้น (data โหลดแล้วใน onAuthStateChanged)
   if(dbUnsubscribe) dbUnsubscribe();
-
-  // โหลดครั้งแรกแบบ one-time เพื่อได้ข้อมูลทันที
-  try {
-    const snap = await getDoc(docRef);
-    if(snap.exists()){
-      const data = snap.data();
-      holdings = data.holdings||[];
-      aiCache = data.aiCache||{};
-      newsCache = data.newsCache||[];
-      lastNewsTime = data.lastNewsTime||0;
-      // โหลด priceCache จาก Firestore ทันที (Actions บันทึกไว้)
-      const priceCache = data.priceCache || {};
-      Object.entries(priceCache).forEach(([ticker, p]) => {
-        if(p && p.current) {
-          prices[ticker] = p;
-          _quoteCache[ticker] = { // ใส่ใน quote cache ด้วย
-            close: String(p.current),
-            previous_close: String(p.prev || p.current),
-            high: String(p.dayHigh || p.current),
-            low: String(p.dayLow || p.current)
-          };
-          _quoteCacheTime[ticker] = Date.now();
-        }
-      });
-      if(Object.keys(priceCache).length > 0) {
-        console.log(`[Cache] Loaded ${Object.keys(priceCache).length} prices from Firestore`);
-      }
-    }
-  } catch(e){ console.warn('initUserData:', e.message); }
-
-  // subscribe realtime updates
-  // หมายเหตุ: ไม่ render AI ใน callback เพราะ userProfile อาจยังไม่พร้อม
-  // AI จะ render หลัง login flow เสร็จแล้วเท่านั้น
+  const docRef = doc(db,'users',currentUser.uid,'portfolio','main');
   dbUnsubscribe = onSnapshot(docRef, (snap) => {
     if(snap.exists()){
       const data = snap.data();
-      const oldLen = holdings.length;
       holdings = data.holdings||[];
       aiCache = data.aiCache||{};
       newsCache = data.newsCache||[];
       lastNewsTime = data.lastNewsTime||0;
       renderHoldings();
-      // render AI เฉพาะถ้า userProfile โหลดแล้ว และเป็น premium
-      if(userProfile && isPremium()){
-        renderAICards();
-        if(newsCache.length) renderNews();
-      }
+      if(userProfile && isPremium()){ renderAICards(); if(newsCache.length) renderNews(); }
     }
   }, (err) => { console.warn('onSnapshot error:', err.message); });
 }
@@ -1330,30 +1345,30 @@ async function fetchAllPrices(){
   });
   if(hasAnyCache) renderHoldings();
 
-  // Step 2: fetch FX rate (ผ่าน queue, priority high)
-  await fetchFXRate();
-  if(hasAnyCache) renderHoldings(); // update THB values
-
-  // Step 3: fetch portfolio แบบ parallel (ไม่ผ่าน queue เพราะมีแค่ไม่กี่ตัว)
-  // ใช้ stagger 1 วินาที/ตัว เพื่อไม่ให้ Twelve Data block
-  await Promise.all(holdings.map((h, i) =>
+  // Step 2: fetch ราคา + FX พร้อมกัน (parallel, stagger ราคา)
+  // FX direct fetch ไม่รอ queue, ราคาหุ้น stagger 1 วินาที/ตัว
+  const pricePromises = holdings.map((h, i) =>
     new Promise(resolve => setTimeout(async () => {
       await fetchPriceDirect(h.ticker, h.type);
-      renderHoldings();
+      renderHoldings(); // update ทุกครั้งที่ได้ราคาใหม่
       resolve();
-    }, i * 1200)) // stagger 1.2 วินาที/ตัว
-  ));
+    }, i * 1000)) // stagger 1 วินาที/ตัว
+  );
+  // FX fetch พร้อมกับราคาแรก ไม่รอ
+  fetchFXRate().then(() => renderHoldings());
+  await Promise.all(pricePromises);
   const el = document.getElementById('lastUpdate');
   if(el) el.textContent = new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
 }
 let _fxCacheTime = 0;
 async function fetchFXRate(){
   const now = Date.now();
-  // cache 5 นาที ไม่ดึงซ้ำถี่เกินไป
-  if (fxRate > 0 && now - _fxCacheTime < 5 * 60 * 1000) return;
+  if (fxRate > 0 && now - _fxCacheTime < 5 * 60 * 1000) return; // cache 5 นาที
   try {
-    const r = await rateLimitedFetch(
-      `https://api.twelvedata.com/quote?symbol=USD%2FTHB&apikey=${TD_KEY}`
+    // direct fetch ไม่ผ่าน queue — FX rate ดึงครั้งเดียวไม่กระทบ quota มาก
+    const r = await fetch(
+      `https://api.twelvedata.com/quote?symbol=USD%2FTHB&apikey=${TD_KEY}`,
+      { signal: AbortSignal.timeout(8000) }
     );
     const d = await r.json();
     if (d.close) {
