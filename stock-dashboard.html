@@ -577,13 +577,16 @@ window.doRegister = async () => {
     await updateProfile(cred.user, { displayName: name });
     // Give 9 day trial to all new users
     const trialExpiry = Date.now() + 9*24*60*60*1000;
-    await setDoc(doc(db,'users',cred.user.uid,'profile','data'),{
+    const newProfile = {
       name, email,
       plan: 'trial',
       planExpiry: trialExpiry,
       createdAt: Date.now(),
       isAdmin: false
-    });
+    };
+    // เขียน top-level doc สำหรับ admin query
+    await setDoc(doc(db,'users',cred.user.uid), { email, name, createdAt: Date.now() });
+    await setDoc(doc(db,'users',cred.user.uid,'profile','data'), newProfile);
   }catch(e){ showAuthError(e.code==='auth/email-already-in-use'?'อีเมลนี้มีผู้ใช้งานแล้ว':'เกิดข้อผิดพลาด: '+e.message); }
 };
 
@@ -595,11 +598,13 @@ window.doGoogleLogin = async () => {
     const snap = await getDoc(profRef);
     if(!snap.exists()){
       const trialExpiry = Date.now() + 9*24*60*60*1000;
-      await setDoc(profRef,{
+      const gProfile = {
         name:result.user.displayName||'', email:result.user.email||'',
         plan:'trial', planExpiry:trialExpiry,
         createdAt:Date.now(), isAdmin:false
-      });
+      };
+      await setDoc(doc(db,'users',result.user.uid), { email:result.user.email||'', name:result.user.displayName||'', createdAt:Date.now() });
+      await setDoc(profRef, gProfile);
     }
   }catch(e){
     if(e.code==='auth/popup-blocked'||e.code==='auth/popup-closed-by-user'){
@@ -657,6 +662,7 @@ onAuthStateChanged(auth, async (user) => {
       // Auto create profile if not exists (Google login)
       const trialExpiry = Date.now() + 9*24*60*60*1000;
       userProfile = {name:user.displayName||'',email:user.email||'',plan:'trial',planExpiry:trialExpiry,createdAt:Date.now(),isAdmin:false};
+      await setDoc(doc(db,'users',user.uid), { email:user.email||'', name:user.displayName||'', createdAt:Date.now() });
       await setDoc(doc(db,'users',user.uid,'profile','data'), userProfile);
     }
     updateUserUI();
@@ -1124,13 +1130,20 @@ let tickerApiFailCount = 0;
 // ดึงราคาทีละ 1 symbol (Twelve Data free: 8 req/min)
 async function fetchTickerSingle(sym) {
   try {
-    // ใช้ /quote ให้ได้ทั้ง price และ previous_close สำหรับ % change
     const res = await fetch(
       `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(sym)}&apikey=${TD_KEY}`,
       { signal: AbortSignal.timeout(10000) }
     );
     const q = await res.json();
-    if (!q || q.status === 'error' || !q.close) return;
+    // debug: log ทุก response
+    if (q.status === 'error' || q.code) {
+      console.warn(`Ticker ${sym}: ${q.message || q.code}`);
+      return;
+    }
+    if (!q.close) {
+      console.warn(`Ticker ${sym}: no close price`, Object.keys(q));
+      return;
+    }
     const cur = parseFloat(q.close);
     const prev = parseFloat(q.previous_close) || cur;
     tickerPrices[sym] = {
@@ -1138,17 +1151,20 @@ async function fetchTickerSingle(sym) {
       change: cur - prev,
       changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0
     };
-  } catch(e) { /* ข้ามถ้า timeout */ }
+    console.log(`Ticker ✅ ${sym}: $${cur.toFixed(2)}`);
+  } catch(e) {
+    console.warn(`Ticker ${sym} error:`, e.message);
+  }
 }
 
-// ดึงทีละตัว หน่วง 1 วินาที (60 req/min แต่ free plan อยู่ที่ 8 req/min จริงๆ)
-// ดังนั้นหน่วง 8 วินาที = ปลอดภัย 100%
-// แต่ใช้ 8s × 30 ตัว = 4 นาทีโหลดครบ — แสดงทีละตัวระหว่างนั้น
+// ดึง 2 ตัวพร้อมกัน หน่วง 15 วินาที = ~8 req/min พอดี free plan limit
+// 30 ตัว / 2 = 15 waves × 15s = ~3.5 นาทีครบ แต่เห็นทยอยขึ้นตลอด
 async function fetchTickerParallel(symbols) {
-  for (let i = 0; i < symbols.length; i++) {
-    await fetchTickerSingle(symbols[i]);
-    renderTicker1(); // update แถบทันทีทุกตัว ทำให้เห็นทยอยขึ้น
-    if (i < symbols.length - 1) await sleep(8000); // 8s = 7-8 req/min ปลอดภัย
+  for (let i = 0; i < symbols.length; i += 2) {
+    const pair = symbols.slice(i, i + 2);
+    await Promise.all(pair.map(s => fetchTickerSingle(s)));
+    renderTicker1(); // update แถบทันที
+    if (i + 2 < symbols.length) await sleep(15000); // 15s ระหว่าง wave
   }
 }
 

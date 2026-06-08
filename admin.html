@@ -155,7 +155,7 @@ tr:hover td{background:rgba(0,212,170,0.03);}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, getDocs, collection, updateDoc, query, orderBy, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, getDocs, collection, collectionGroup, updateDoc, query, orderBy, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const FB_CFG={apiKey:"AIzaSyAb073KKqOV5aYP_S57JTvOUOCUWvr2Ebo",authDomain:"stock-web-c2068.firebaseapp.com",projectId:"stock-web-c2068",storageBucket:"stock-web-c2068.firebasestorage.app",messagingSenderId:"4202725865",appId:"1:4202725865:web:180682bc845693d92c0b78"};
@@ -224,14 +224,27 @@ async function loadPayments(){
 
 async function loadUsers(){
   try{
-    const snap = await getDocs(collection(db,'users'));
+    // วิธีที่ 1: ใช้ collectionGroup('profile') ดึง subcollection ทุก user พร้อมกัน
+    const snap = await getDocs(collectionGroup(db,'profile'));
     allUsers = [];
-    for(const userDoc of snap.docs){
+    snap.docs.forEach(d => {
+      if(d.id === 'data'){
+        const uid = d.ref.parent.parent.id;
+        allUsers.push({uid, ...d.data()});
+      }
+    });
+    if(allUsers.length > 0){ renderUsers(); return; }
+    // วิธีที่ 2: fallback ดึง top-level users doc
+    const topSnap = await getDocs(collection(db,'users'));
+    for(const userDoc of topSnap.docs){
       const profSnap = await getDoc(doc(db,'users',userDoc.id,'profile','data'));
       if(profSnap.exists()) allUsers.push({uid:userDoc.id,...profSnap.data()});
     }
     renderUsers();
-  }catch(e){ console.error(e); }
+  }catch(e){
+    console.error('loadUsers error:', e.message);
+    renderUsers();
+  }
 }
 
 function updateStats(){
@@ -273,7 +286,13 @@ function renderUsers(){
     const isPrem = u.plan==='premium' && u.planExpiry > Date.now();
     const isTrial = u.plan==='trial' && u.planExpiry > Date.now();
     const expiry = u.planExpiry ? new Date(parseInt(u.planExpiry)).toLocaleDateString('th-TH') : '--';
-    const created = u.createdAt ? new Date(u.createdAt).toLocaleDateString('th-TH') : '--';
+    const created = u.createdAt
+        ? (typeof u.createdAt === 'number'
+            ? new Date(u.createdAt).toLocaleDateString('th-TH')
+            : u.createdAt?.toDate
+              ? u.createdAt.toDate().toLocaleDateString('th-TH')
+              : '--')
+        : '--';
     return `<tr>
       <td>${u.name||'--'}</td>
       <td style="font-family:'Space Mono',monospace;font-size:0.72rem;">${u.email||'--'}</td>
