@@ -737,17 +737,26 @@ onAuthStateChanged(auth, async (user) => {
       await setDoc(doc(db,'users',user.uid,'profile','data'), userProfile);
     }
     updateUserUI();
-    await initUserData();
-    await syncGuestToFirestore(); // sync guest holdings ถ้ามี
+    await initUserData();          // โหลด holdings จาก Firestore
+    await syncGuestToFirestore();  // sync guest holdings ถ้ามี
     await fetchFXRate();
+    // fetch ราคาทันทีหลัง holdings โหลด (ผ่าน priority queue)
     if(holdings.length){
-      for(const h of holdings){ await fetchPrice(h.ticker,h.type); renderHoldings(); await sleep(300); }
-      document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
+      renderHoldings(); // แสดง skeleton ก่อน
+      for(const h of holdings){
+        await fetchPrice(h.ticker, h.type);
+        renderHoldings();
+      }
+      document.getElementById('lastUpdate').textContent =
+        new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
+    } else {
+      renderHoldings();
     }
-    if(lastNewsTime>0&&newsCache.length){ renderNews(); startNewsCountdown(); }
+    if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+    if(isPremium()){ renderAICards(); }
     if(getKey()) setupAutoSchedule();
-    startTickerUpdates();
-    startCentralRefresh(); // ใช้ central refresh timer ตัวเดียว
+    startTickerUpdates(); // ticker เริ่มหลัง portfolio (ใช้ queue เดียวกัน)
+    startCentralRefresh();
   } else {
     // GUEST MODE: แสดงหน้าหลักทันที ไม่บังคับ login
     currentUser = null;
@@ -770,6 +779,11 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 function updateUserUI(){
+  // ลบ guest elements เมื่อ login สำเร็จ
+  const guestBanner = document.getElementById('guestBanner');
+  if(guestBanner) guestBanner.remove();
+  const guestBtn = document.getElementById('guestLoginBtn');
+  if(guestBtn) guestBtn.remove();
   const name = userProfile?.name || currentUser?.displayName || currentUser?.email || 'User';
   const initial = name.charAt(0).toUpperCase();
   document.getElementById('userAvatar').textContent = initial;
@@ -828,7 +842,21 @@ async function initUserData(){
   if(!currentUser) return;
   const docRef = doc(db,'users',currentUser.uid,'portfolio','main');
   if(dbUnsubscribe) dbUnsubscribe();
-  dbUnsubscribe = onSnapshot(docRef,(snap)=>{
+
+  // โหลดครั้งแรกแบบ one-time เพื่อได้ข้อมูลทันที
+  try {
+    const snap = await getDoc(docRef);
+    if(snap.exists()){
+      const data = snap.data();
+      holdings = data.holdings||[];
+      aiCache = data.aiCache||{};
+      newsCache = data.newsCache||[];
+      lastNewsTime = data.lastNewsTime||0;
+    }
+  } catch(e){ console.warn('initUserData:', e.message); }
+
+  // subscribe realtime updates
+  dbUnsubscribe = onSnapshot(docRef, (snap) => {
     if(snap.exists()){
       const data = snap.data();
       holdings = data.holdings||[];
@@ -836,9 +864,9 @@ async function initUserData(){
       newsCache = data.newsCache||[];
       lastNewsTime = data.lastNewsTime||0;
       renderHoldings();
-      if(isPremium()){ renderAICards(); if(newsCache.length)renderNews(); }
+      if(isPremium()){ renderAICards(); if(newsCache.length) renderNews(); }
     }
-  });
+  }, (err) => { console.warn('onSnapshot error:', err.message); });
 }
 
 async function saveDB(){
@@ -955,35 +983,37 @@ window.removeHolding = async (ticker) => {
 
 // ── TWELVE DATA PRICE ──
 // ══════════════════════════════════════════════════
-// QUOTA MANAGER — จำกัด 6 req/นาที รวมทุก request
+// QUOTA MANAGER
+// Twelve Data free = 8 req/min = 1 req ทุก 7.5 วินาที
+// ใช้ sliding window: หน่วง 8 วินาที ระหว่าง requests
+// Portfolio priority: ดึงก่อน, ticker ดึงทีหลัง
 // ══════════════════════════════════════════════════
 const _reqQueue = [];
-let _reqRunning = 0;
-const REQ_LIMIT = 6; // req ต่อนาที (เผื่อ margin จาก 8)
-const REQ_INTERVAL = 60000 / REQ_LIMIT; // 10 วินาที/req
+let _reqProcessing = false;
+const REQ_DELAY = 8000; // 8 วินาที/req = 7.5 req/min ปลอดภัย
 
-function rateLimitedFetch(url) {
+function rateLimitedFetch(url, priority = 'normal') {
   return new Promise((resolve, reject) => {
-    _reqQueue.push({ url, resolve, reject });
-    processQueue();
+    if (priority === 'high') _reqQueue.unshift({ url, resolve, reject });
+    else _reqQueue.push({ url, resolve, reject });
+    if (!_reqProcessing) processQueue();
   });
 }
 
 async function processQueue() {
-  if (_reqRunning >= REQ_LIMIT || !_reqQueue.length) return;
-  const { url, resolve, reject } = _reqQueue.shift();
-  _reqRunning++;
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
-    resolve(res);
-  } catch(e) {
-    reject(e);
-  } finally {
-    setTimeout(() => {
-      _reqRunning--;
-      processQueue();
-    }, REQ_INTERVAL);
+  if (_reqProcessing || !_reqQueue.length) return;
+  _reqProcessing = true;
+  while (_reqQueue.length > 0) {
+    const { url, resolve, reject } = _reqQueue.shift();
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+      resolve(res);
+    } catch(e) {
+      reject(e);
+    }
+    if (_reqQueue.length > 0) await new Promise(r => setTimeout(r, REQ_DELAY));
   }
+  _reqProcessing = false;
 }
 
 // Cache แยก: quote (5 นาที) และ 52W (1 วัน)
@@ -1010,7 +1040,8 @@ async function fetchTwelveData(ticker, type) {
   } else {
     try {
       const res = await rateLimitedFetch(
-        `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&apikey=${TD_KEY}`
+        `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&apikey=${TD_KEY}`,
+        'high' // portfolio มี priority สูง
       );
       q = await res.json();
       if (q.close) { _quoteCache[ticker] = q; _quoteCacheTime[ticker] = now; }
