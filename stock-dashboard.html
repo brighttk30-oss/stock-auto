@@ -548,8 +548,9 @@ tr:hover td{background:rgba(0,212,170,0.03);}
     <h3>🔔 ตั้งแจ้งเตือนราคา</h3>
     <div style="font-size:0.75rem;color:var(--text2);margin-bottom:16px;">ระบบจะแจ้งเตือนผ่าน Browser Notification เมื่อราคาถึงเป้าหมาย</div>
     <div class="form-grid">
-      <div class="fg"><label>หุ้น</label>
-        <select id="alertTicker"><option value="">เลือกหุ้น</option></select>
+      <div class="fg"><label>หุ้น (พิมพ์หรือเลือกจากรายการ)</label>
+        <input type="text" id="alertTicker" list="alertTickerList" placeholder="เช่น NVDA, AAPL..." autocomplete="off" style="text-transform:uppercase;">
+        <datalist id="alertTickerList"></datalist>
       </div>
       <div class="fg"><label>ประเภทแจ้งเตือน</label>
         <select id="alertType">
@@ -573,7 +574,7 @@ tr:hover td{background:rgba(0,212,170,0.03);}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, collectionGroup, addDoc, serverTimestamp, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const FB_CFG={apiKey:"AIzaSyAb073KKqOV5aYP_S57JTvOUOCUWvr2Ebo",authDomain:"stock-web-c2068.firebaseapp.com",projectId:"stock-web-c2068",storageBucket:"stock-web-c2068.firebasestorage.app",messagingSenderId:"4202725865",appId:"1:4202725865:web:180682bc845693d92c0b78"};
@@ -964,7 +965,11 @@ window.addHolding = async () => {
   else { saveGuestHoldings(); showGuestSaveBanner(); }
   closeModal('holdingModal'); showToast('✅ เพิ่ม '+ticker);
   ['inputTicker','inputQty','inputBuyPrice','inputName'].forEach(id=>document.getElementById(id).value='');
-  await fetchPrice(ticker,type); renderHoldings(); if(isPremium()) renderAICards();
+  // fetch ราคาทันทีเมื่อเพิ่มหุ้น (ไม่ผ่าน queue ให้ไว)
+  delete _quoteCache[ticker]; delete _quoteCacheTime[ticker]; // clear cache ให้ดึงใหม่
+  await fetchPrice(ticker, type);
+  renderHoldings();
+  if(isPremium()) renderAICards();
 };
 window.removeHolding = async (ticker) => {
   if(!confirm('ลบ '+ticker+' ?')) return;
@@ -1086,44 +1091,56 @@ async function fetchTwelveData(ticker, type) {
   };
 }
 async function fetchPrice(ticker, type){
-  // ถ้ามี cache เก่าอยู่แล้ว แสดงทันที (อัปเดตทีหลัง)
-  if(_quoteCache[ticker]){
-    const q = _quoteCache[ticker];
-    const cur = parseFloat(q.close);
-    const prev = parseFloat(q.previous_close) || cur;
-    const c52 = _52wCache[ticker];
-    prices[ticker] = {
-      current: cur, prev, change: cur-prev,
-      changePct: prev>0 ? ((cur-prev)/prev*100) : 0,
-      high52: c52?.high52 || cur, low52: c52?.low52 || cur,
-      dayHigh: parseFloat(q.high)||cur, dayLow: parseFloat(q.low)||cur,
-      stale: true // mark ว่าเป็นข้อมูลเก่า
-    };
-    renderHoldings(); // แสดงทันที
-  }
   const result = await fetchTwelveData(ticker, type);
   if(result){
-    const m = result.meta; const cur = m.regularMarketPrice; const prev = m.chartPreviousClose||cur;
-    prices[ticker] = {current:cur,prev,change:cur-prev,changePct:prev>0?((cur-prev)/prev*100):0,high52:m.fiftyTwoWeekHigh||cur,low52:m.fiftyTwoWeekLow||cur,dayHigh:m.regularMarketDayHigh||cur,dayLow:m.regularMarketDayLow||cur};
-  } else if(!prices[ticker]) {
-    prices[ticker] = null;
+    const m = result.meta;
+    const cur = m.regularMarketPrice;
+    const prev = m.chartPreviousClose || cur;
+    prices[ticker] = {
+      current:cur, prev, change:cur-prev,
+      changePct: prev>0 ? ((cur-prev)/prev*100) : 0,
+      high52: m.fiftyTwoWeekHigh||cur, low52: m.fiftyTwoWeekLow||cur,
+      dayHigh: m.regularMarketDayHigh||cur, dayLow: m.regularMarketDayLow||cur
+    };
+  } else {
+    // ถ้า fetch ล้มเหลว คง prices เก่าไว้ (ไม่ set null ถ้ามีอยู่แล้ว)
+    if(!prices[ticker]) prices[ticker] = null;
   }
 }
 
-// โหลดทุกหุ้นพร้อมกัน stagger 1 วินาที/ตัว
-// ไม่รอ queue — แต่ละตัวเริ่มต้นพร้อมกัน
+// โหลดทุกหุ้น — แสดง cache ทันที แล้ว fetch ใหม่ผ่าน queue
+// ลำดับ: 1) แสดงราคาจาก cache ทันที 2) queue fetch ทีละตัว 8 วินาที
 async function fetchAllPrices(){
   if(!holdings.length) return;
+
+  // Step 1: แสดงราคาจาก cache ทันที (ไม่รอ network)
+  let hasAnyCache = false;
+  holdings.forEach(h => {
+    if(_quoteCache[h.ticker]){
+      const q = _quoteCache[h.ticker];
+      const cur = parseFloat(q.close);
+      const prev = parseFloat(q.previous_close) || cur;
+      const c52 = _52wCache[h.ticker];
+      prices[h.ticker] = {
+        current:cur, prev, change:cur-prev,
+        changePct: prev>0?((cur-prev)/prev*100):0,
+        high52: c52?.high52||cur, low52: c52?.low52||cur,
+        dayHigh: parseFloat(q.high)||cur, dayLow: parseFloat(q.low)||cur,
+      };
+      hasAnyCache = true;
+    }
+  });
+  if(hasAnyCache) renderHoldings();
+
+  // Step 2: fetch FX rate (ผ่าน queue, priority high)
   await fetchFXRate();
-  // เริ่มทุกตัวพร้อมกัน stagger 1 วินาที
-  const promises = holdings.map((h, i) =>
-    new Promise(r => setTimeout(async () => {
-      await fetchPrice(h.ticker, h.type);
-      renderHoldings();
-      r();
-    }, i * 1000)) // stagger 1 วินาที/ตัว
-  );
-  await Promise.all(promises);
+  if(hasAnyCache) renderHoldings(); // update THB values
+
+  // Step 3: queue fetch ทีละตัว ผ่าน rateLimitedFetch (8 วินาที/ตัว)
+  for(const h of holdings){
+    await fetchPrice(h.ticker, h.type);
+    renderHoldings();
+  }
   const el = document.getElementById('lastUpdate');
   if(el) el.textContent = new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
 }
@@ -1739,7 +1756,7 @@ function renderAlerts(){
 
 window.addPriceAlert = () => {
   if(!isPremium()){ openModal('upgradeModal'); return; }
-  const ticker = document.getElementById('alertTicker').value;
+  const ticker = document.getElementById('alertTicker').value.trim().toUpperCase();
   const type = document.getElementById('alertType').value;
   const price = parseFloat(document.getElementById('alertPrice').value);
   if(!ticker || isNaN(price) || price <= 0){ showToast('กรอกข้อมูลให้ครบ',true); return; }
@@ -1778,9 +1795,14 @@ function checkPriceAlerts(){
 }
 
 function updateAlertTickerSelect(){
-  const sel = document.getElementById('alertTicker');
-  if(!sel) return;
-  sel.innerHTML = '<option value="">เลือกหุ้น</option>' + holdings.map(h=>`<option value="${h.ticker}">${h.ticker}</option>`).join('');
+  const dl = document.getElementById('alertTickerList');
+  if(!dl) return;
+  // รวม holdings + watchlist 30 ตัว
+  const opts = new Set([
+    ...holdings.map(h=>h.ticker),
+    ...TICKER_WATCHLIST.map(w=>w.s)
+  ]);
+  dl.innerHTML = [...opts].map(t=>`<option value="${t}">`).join('');
 }
 
 
@@ -1917,34 +1939,63 @@ window.calcCostAvg = () => {
 // ══════════════════════════════════════════════════
 window.sharePortfolio = async () => {
   if(!holdings.length){ showToast('เพิ่มหุ้นก่อน', true); return; }
-  // encode holdings + prices เป็น base64 URL
+  showToast('⏳ กำลังสร้าง link...');
   const shareData = {
-    name: userProfile?.name || currentUser?.displayName || 'Guest',
+    name: userProfile?.name || currentUser?.displayName || 'ผู้ใช้',
     holdings: holdings.map(h => ({
-      ticker: h.ticker, type: h.type, qty: h.qty, buyPrice: h.buyPrice, name: h.name
+      ticker: h.ticker, type: h.type, qty: h.qty, buyPrice: h.buyPrice, name: h.name||''
     })),
-    prices: Object.fromEntries(Object.entries(prices).filter(([,v])=>v).map(([k,v])=>([k,{current:v.current,changePct:v.changePct}]))),
-    fxRate, sharedAt: new Date().toISOString()
+    prices: Object.fromEntries(
+      Object.entries(prices)
+        .filter(([,v])=>v)
+        .map(([k,v])=>([k,{current:v.current,changePct:v.changePct||0}]))
+    ),
+    fxRate: fxRate||32.8,
+    sharedAt: new Date().toISOString()
   };
-  const encoded = btoa(encodeURIComponent(JSON.stringify(shareData)));
-  const url = `${window.location.origin}${window.location.pathname}?share=${encoded}`;
   try {
-    await navigator.clipboard.writeText(url);
-    showToast('✅ คัดลอก link แชร์แล้ว — ส่งให้เพื่อนดูพอร์ตได้เลย');
+    // บันทึกใน Firestore และสร้าง short ID
+    const shareId = Math.random().toString(36).slice(2,9);
+    await setDoc(doc(db,'sharedPortfolios',shareId), {
+      ...shareData,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 30*24*60*60*1000 // หมดอายุ 30 วัน
+    });
+    const url = `${window.location.origin}${window.location.pathname}?share=${shareId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('✅ คัดลอก link แล้ว — ใช้งานได้ 30 วัน');
+    } catch(e) {
+      prompt('คัดลอก link นี้:', url);
+    }
   } catch(e) {
-    // fallback: แสดงใน modal
-    prompt('คัดลอก link นี้:', url);
+    // Firestore ล้มเหลว — fallback base64 (อาจยาว)
+    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(shareData)))).slice(0, 1800);
+    const url = `${window.location.origin}${window.location.pathname}?share=${encoded}`;
+    try { await navigator.clipboard.writeText(url); showToast('✅ คัดลอก link แล้ว'); }
+    catch(e2) { prompt('คัดลอก link:', url); }
   }
 };
 
 // ตรวจสอบ share URL ตอนเปิดหน้า
-function checkShareUrl(){
+async function checkShareUrl(){
   const params = new URLSearchParams(window.location.search);
   const shareParam = params.get('share');
   if(!shareParam) return;
+
+  // ลอง Firestore short ID ก่อน (7 chars alphanumeric)
+  if(/^[a-z0-9]{7}$/.test(shareParam)){
+    try {
+      const snap = await getDoc(doc(db,'sharedPortfolios',shareParam));
+      if(snap.exists()){
+        showSharedPortfolio(snap.data());
+        return;
+      }
+    } catch(e) { console.warn('Share Firestore:', e.message); }
+  }
+  // fallback: base64 decode
   try {
-    const data = JSON.parse(decodeURIComponent(atob(shareParam)));
-    // แสดง read-only view
+    const data = JSON.parse(decodeURIComponent(escape(atob(shareParam))));
     showSharedPortfolio(data);
   } catch(e) { console.warn('Invalid share URL'); }
 }
@@ -1994,19 +2045,8 @@ async function sendLineNotify(message){
   }
 }
 
-// hook Price Alert ให้ส่ง Line ด้วย
-const _origCheckAlerts = checkPriceAlerts;
-window.checkPriceAlerts = function(){
-  const before = priceAlerts.filter(a=>!a.triggered).length;
-  _origCheckAlerts();
-  const after = priceAlerts.filter(a=>!a.triggered).length;
-  if(after < before){
-    priceAlerts.filter(a=>a.triggered).forEach(a => {
-      const p = prices[a.ticker];
-      if(p) sendLineNotify(`\n🔔 StockAI แจ้งเตือน\n${a.ticker}: $${p.current.toFixed(2)} ${a.type==='above'?'≥':'≤'} เป้า $${a.targetPrice}`);
-    });
-  }
-};
+// Line Notify ผ่าน browser ไม่ได้เพราะ CORS
+// การแจ้งเตือนผ่าน Line ส่งโดย GitHub Actions แทน (analyze.js)
 
 // ══════════════════════════════════════════════════
 // PORTFOLIO HISTORY (Daily Snapshot)
@@ -2071,16 +2111,24 @@ function renderPortfolioHistory(){
     </div>`;
 }
 
-// hook renderHoldings — รวม pie + alerts + snapshot ในที่เดียว
-// ไม่ซ้อน hook หลายชั้น ป้องกัน recursion
+// hook renderHoldings — รวมทุก side-effect ในที่เดียว
 let _snapTimer = null;
-const _baseRenderHoldings = renderHoldings; // เก็บ base function
+let _renderLock = false; // ป้องกัน recursion
+const _baseRenderHoldings = renderHoldings;
 window.renderHoldings = function(){
-  _baseRenderHoldings();
-  renderPieChart();
-  checkPriceAlerts();
-  updateAlertTickerSelect();
-  // debounce snapshot 3 วินาที ไม่รบกวน render ถี่ๆ
+  if(_renderLock) return;
+  _renderLock = true;
+  try {
+    _baseRenderHoldings();
+    renderPieChart();
+    checkPriceAlerts();
+    updateAlertTickerSelect();
+    // teaser AI: update ทุกครั้งที่ holdings/prices เปลี่ยน
+    if(!isPremium()) renderLockedAI();
+  } finally {
+    _renderLock = false;
+  }
+  // debounce snapshot 3 วินาที
   clearTimeout(_snapTimer);
   _snapTimer = setTimeout(() => {
     savePortfolioSnapshot();
@@ -2131,6 +2179,7 @@ function renderTeaserAI(){
 
 // แก้ renderLockedAI ให้ใช้ teaser แทน
 window.renderLockedAI = function(){
+  if(isPremium()) return; // ถ้าเป็น premium ไม่ต้องแสดง lock
   if(holdings.length > 0) renderTeaserAI();
   else {
     document.getElementById('aiSection').innerHTML = `
