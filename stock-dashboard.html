@@ -786,8 +786,8 @@ onAuthStateChanged(auth, async (user) => {
     await fetchFXRate();
     // reset premium state tracker เพื่อให้ hook render AI ถูกต้อง
     _lastPremiumState = null;
-    renderHoldings(); // แสดง skeleton ทันที
-    if(holdings.length) fetchAllPrices(); // โหลดราคา non-blocking
+    renderHoldings(); // แสดงทันที (มี priceCache แล้ว = เห็นราคาเลย)
+    if(holdings.length) fetchAllPrices(); // background refresh ราคาใหม่
     if(isPremium()){
       renderAICards();
       if(lastNewsTime > 0 && newsCache.length){ renderNews(); startNewsCountdown(); }
@@ -893,6 +893,23 @@ async function initUserData(){
       aiCache = data.aiCache||{};
       newsCache = data.newsCache||[];
       lastNewsTime = data.lastNewsTime||0;
+      // โหลด priceCache จาก Firestore ทันที (Actions บันทึกไว้)
+      const priceCache = data.priceCache || {};
+      Object.entries(priceCache).forEach(([ticker, p]) => {
+        if(p && p.current) {
+          prices[ticker] = p;
+          _quoteCache[ticker] = { // ใส่ใน quote cache ด้วย
+            close: String(p.current),
+            previous_close: String(p.prev || p.current),
+            high: String(p.dayHigh || p.current),
+            low: String(p.dayLow || p.current)
+          };
+          _quoteCacheTime[ticker] = Date.now();
+        }
+      });
+      if(Object.keys(priceCache).length > 0) {
+        console.log(`[Cache] Loaded ${Object.keys(priceCache).length} prices from Firestore`);
+      }
     }
   } catch(e){ console.warn('initUserData:', e.message); }
 
@@ -1131,7 +1148,15 @@ async function fetchTwelveData(ticker, type) {
       );
       q = await res.json();
       if (q.close) { _quoteCache[ticker] = q; _quoteCacheTime[ticker] = now; }
-      else throw new Error(q.message || 'no close');
+      else {
+        // detect quota หมด
+        const msg = q.message || '';
+        if(msg.toLowerCase().includes('run out') || msg.toLowerCase().includes('credits')) {
+          markQuotaExhausted();
+          showErrorBanner('API quota หมดวันนี้ — ราคาจะอัปเดตพรุ่งนี้ หรือดูราคาจาก cache');
+        }
+        throw new Error(msg || 'no close');
+      }
     } catch(e) {
       console.warn('Quote', ticker, e.message);
       if (_quoteCache[ticker]) q = _quoteCache[ticker]; // ใช้ cache เก่าถ้ามี
@@ -1221,7 +1246,7 @@ async function fetchSECFund(ticker) {
   }
 }
 
-async function fetchPriceDirect(ticker, type){
+async function fetchPriceDirect(ticker, type, _retry=0){
   if(type === 'MF') { await fetchSECFund(ticker); return; }
   const symbol = getTwelveSymbol(ticker, type);
   try {
@@ -1252,6 +1277,11 @@ async function fetchPriceDirect(ticker, type){
     _quoteCacheTime[ticker] = Date.now();
   } catch(e) {
     console.warn('fetchPriceDirect error', ticker, e.message);
+    // retry 1 ครั้งหลัง 3 วินาที
+    if(_retry === 0) {
+      await new Promise(r => setTimeout(r, 3000));
+      return fetchPriceDirect(ticker, type, 1);
+    }
     if(!prices[ticker]) prices[ticker] = null;
   }
 }
@@ -1304,11 +1334,15 @@ async function fetchAllPrices(){
   await fetchFXRate();
   if(hasAnyCache) renderHoldings(); // update THB values
 
-  // Step 3: queue fetch ทีละตัว ผ่าน rateLimitedFetch (8 วินาที/ตัว)
-  for(const h of holdings){
-    await fetchPrice(h.ticker, h.type);
-    renderHoldings();
-  }
+  // Step 3: fetch portfolio แบบ parallel (ไม่ผ่าน queue เพราะมีแค่ไม่กี่ตัว)
+  // ใช้ stagger 1 วินาที/ตัว เพื่อไม่ให้ Twelve Data block
+  await Promise.all(holdings.map((h, i) =>
+    new Promise(resolve => setTimeout(async () => {
+      await fetchPriceDirect(h.ticker, h.type);
+      renderHoldings();
+      resolve();
+    }, i * 1200)) // stagger 1.2 วินาที/ตัว
+  ));
   const el = document.getElementById('lastUpdate');
   if(el) el.textContent = new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
 }
@@ -2537,6 +2571,38 @@ window.renderLockedAI = function(){
 // ══════════════════════════════════════════════════
 checkShareUrl().catch(e=>console.warn('shareUrl:',e));   // เช็ค share URL ตอนเปิดหน้า
 loadSocialProof(); // โหลด social proof
+
+// ── OFFLINE DETECTION ──
+function showOfflineBanner(show){
+  let banner = document.getElementById('offlineBanner');
+  if(show){
+    if(!banner){
+      banner = document.createElement('div');
+      banner.id = 'offlineBanner';
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:var(--red);color:#fff;text-align:center;padding:8px;font-size:0.78rem;font-weight:600;letter-spacing:0.5px;';
+      banner.textContent = '📡 ไม่มีการเชื่อมต่ออินเทอร์เน็ต — ข้อมูลอาจไม่อัปเดต';
+      document.body.prepend(banner);
+    }
+  } else {
+    if(banner) banner.remove();
+  }
+}
+window.addEventListener('online',  () => { showOfflineBanner(false); showToast('✅ เชื่อมต่ออินเทอร์เน็ตแล้ว'); });
+window.addEventListener('offline', () => { showOfflineBanner(true); });
+if(!navigator.onLine) showOfflineBanner(true);
+
+// ── ERROR BANNER ──
+window.showErrorBanner = (msg) => {
+  let banner = document.getElementById('errorBanner');
+  if(!banner){
+    banner = document.createElement('div');
+    banner.id = 'errorBanner';
+    banner.style.cssText = 'background:rgba(255,77,109,0.1);border:1px solid rgba(255,77,109,0.3);border-radius:8px;padding:10px 16px;margin:10px 0;font-size:0.75rem;color:var(--red);display:flex;justify-content:space-between;align-items:center;';
+    const container = document.querySelector('.container');
+    if(container) container.prepend(banner);
+  }
+  banner.innerHTML = `⚠️ ${msg} <button onclick="document.getElementById('errorBanner').remove()" style="background:none;border:none;cursor:pointer;color:var(--red);font-size:1rem;margin-left:8px;">✕</button>`;
+};
 
 // ── PWA Service Worker ──
 if('serviceWorker' in navigator){
