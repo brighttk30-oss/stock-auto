@@ -8,7 +8,8 @@ initializeApp({ credential: cert(serviceAccount) });
 const db = getFirestore();
 
 const OR_KEY = process.env.OPENROUTER_KEY;
-const TD_KEY = process.env.TWELVE_DATA_KEY;
+const TD_KEY = process.env.TWELVE_DATA_KEY;   // Key 1: สำหรับ Portfolio analysis
+const TD_KEY_2 = process.env.TWELVE_DATA_KEY_2; // Key 2: สำหรับ Watchlist ticker (shared cache)
 
 // watchlist 30 ตัว สำหรับ AI แนะนำ
 const WATCHLIST = [
@@ -370,6 +371,102 @@ async function updateStats() {
   }
 }
 
+// ── MODE: ดึงราคา watchlist → Firestore shared cache (ทุก 20 นาที) ──
+// ใช้ TD_KEY_2 แยกจาก TD_KEY เพื่อไม่กิน quota ของ portfolio
+async function fetchWatchlistPrices() {
+  if(!TD_KEY_2) {
+    console.warn('⚠️ TWELVE_DATA_KEY_2 not set — skip watchlist fetch');
+    return;
+  }
+
+  const now = new Date();
+  const thaiTime = now.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
+  console.log(`\n📊 Fetching watchlist prices at ${thaiTime}`);
+
+  const allSyms = WATCHLIST.map(w => w.s);
+  const priceMap = {};
+  let successCount = 0;
+  let quotaExhausted = false;
+
+  // ดึงทีละ batch 8 ตัว
+  for(let i = 0; i < allSyms.length; i += 8) {
+    if(quotaExhausted) break;
+
+    const batch = allSyms.slice(i, i + 8);
+    console.log(`  Batch ${Math.floor(i/8)+1}: ${batch.join(', ')}`);
+
+    try {
+      // ใช้ TD_KEY_2 เพื่อแยก quota
+      const joined = batch.join(',');
+      const res = await fetch(
+        `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(joined)}&apikey=${TD_KEY_2}`,
+        { signal: AbortSignal.timeout(20000) }
+      );
+
+      // detect 429
+      if(res.status === 429) {
+        console.warn('  ⚠️ 429 Too Many Requests — quota exhausted for TD_KEY_2');
+        quotaExhausted = true;
+        break;
+      }
+
+      const data = await res.json();
+
+      // detect quota message
+      if(data.message && data.message.toLowerCase().includes('run out')) {
+        console.warn('  ⚠️ Quota exhausted:', data.message);
+        quotaExhausted = true;
+        break;
+      }
+
+      // parse response (1 symbol = object, หลาย symbol = nested object)
+      const entries = batch.length === 1 ? { [batch[0]]: data } : data;
+      Object.entries(entries).forEach(([sym, q]) => {
+        if(!q || q.status === 'error' || !q.close) return;
+        const cur = parseFloat(q.close);
+        const prev = parseFloat(q.previous_close) || cur;
+        const high52 = parseFloat(q.fifty_two_week?.high || cur);
+        const low52  = parseFloat(q.fifty_two_week?.low  || cur);
+        priceMap[sym] = {
+          price: cur,
+          prev,
+          change: cur - prev,
+          changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0,
+          high52: isNaN(high52) ? cur : high52,
+          low52:  isNaN(low52)  ? cur : low52,
+        };
+        successCount++;
+      });
+
+    } catch(e) {
+      console.error(`  ❌ Batch error:`, e.message);
+    }
+
+    // หน่วง 1 วินาทีระหว่าง batch
+    if(i + 8 < allSyms.length && !quotaExhausted) await sleep(1000);
+  }
+
+  console.log(`✅ Got prices: ${successCount}/${allSyms.length} symbols`);
+
+  if(successCount === 0) {
+    console.warn('No prices fetched — skip Firestore write');
+    return;
+  }
+
+  // บันทึกใน Firestore: marketData/tickerPrices
+  // browser ทุก user จะอ่านจาก document นี้แทนการยิง Twelve Data เอง
+  await db.doc('marketData/tickerPrices').set({
+    prices: priceMap,
+    updatedAt: now.toISOString(),
+    thaiTime,
+    symbolCount: successCount,
+    quotaExhausted
+  });
+
+  console.log(`💾 Saved to Firestore: marketData/tickerPrices`);
+  if(quotaExhausted) console.warn('⚠️ Quota exhausted — partial data saved');
+}
+
 // ── MAIN ──
 async function main() {
   const now = new Date();
@@ -379,17 +476,22 @@ async function main() {
   console.log('🚀 StockAI Auto Analysis');
   console.log('📅 Time (Bangkok):', thaiTime);
   console.log('🕐 Hour:', thaiHour);
+  console.log('🔑 TD_KEY_2:', TD_KEY_2 ? '✅ set' : '❌ not set');
 
-  // ตัดสินใจ mode ตามเวลา
-  // 08:00 → watchlist + recommendation + portfolios
-  // 21:00 → portfolios อย่างเดียว
-  // workflow_dispatch → ทำทั้งหมด
   const isManual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
-  const isMorning = thaiHour >= 7 && thaiHour <= 9; // 08:00 ±1 ชั่วโมง
+  const isMorning = thaiHour >= 7 && thaiHour <= 9;
+  const isTickerMode = process.env.RUN_MODE === 'ticker'; // mode พิเศษสำหรับ ticker
 
-  if (isManual || isMorning) {
+  if(isTickerMode) {
+    // mode: ดึงราคา watchlist เท่านั้น (รันทุก 20 นาที)
+    await fetchWatchlistPrices();
+  } else if(isManual || isMorning) {
+    // mode: วิเคราะห์ทั้งหมด + recommendations
     await analyzeWatchlistAndRecommend();
+    // ดึงราคา watchlist ด้วย ถ้ามี TD_KEY_2
+    if(TD_KEY_2) await fetchWatchlistPrices();
   } else {
+    // mode: วิเคราะห์ portfolios (21:00)
     await analyzeUserPortfolios();
   }
 
