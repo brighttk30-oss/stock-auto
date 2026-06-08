@@ -731,6 +731,7 @@ window.doLogout = async () => {
   if(typeof autoTimer !== 'undefined') clearInterval(autoTimer);
   if(typeof newsCountdown !== 'undefined') clearInterval(newsCountdown);
   if(typeof _snapTimer !== 'undefined') clearTimeout(_snapTimer);
+  if(typeof _tickerUnsubscribe !== 'undefined' && _tickerUnsubscribe) _tickerUnsubscribe();
   if(dbUnsubscribe) dbUnsubscribe();
   await signOut(auth);
   window.location.reload();
@@ -1061,6 +1062,18 @@ async function processQueue() {
     const { url, resolve, reject } = _reqQueue.shift();
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+      // detect 429 — pause queue 60 วินาที
+      if(res.status === 429) {
+        console.warn('[Queue] 429 received — pausing 60s');
+        reject(new Error('429 Too Many Requests'));
+        // clear queue ถ้าเป็น ticker requests
+        if(url.includes('symbol=') && url.includes('apikey=')) {
+          markQuotaExhausted();
+          _reqQueue.length = 0; // clear queue
+        }
+        await new Promise(r => setTimeout(r, 60000));
+        break;
+      }
       resolve(res);
     } catch(e) {
       reject(e);
@@ -1607,65 +1620,113 @@ const TICKER_WATCHLIST = [
 
 let tickerPrices = {};
 let tickerTimer = null;
-let tickerApiFailCount = 0;
+// ── TICKER QUOTA GUARD ──
+// เก็บ state quota หมด ป้องกันการยิง request ต่อเมื่อ 429
+let _tickerQuotaExhausted = false;
+let _tickerQuotaResetAt = 0; // reset เที่ยงคืน UTC
 
-// Ticker ใช้ rateLimitedFetch ร่วมกับ portfolio (quota pool เดียวกัน)
+function isTickerQuotaOK() {
+  // reset quota flag เมื่อวันใหม่
+  const nowUTC = Date.now();
+  const todayMidnight = new Date();
+  todayMidnight.setUTCHours(0,0,0,0);
+  todayMidnight.setUTCDate(todayMidnight.getUTCDate()+1);
+  if(_tickerQuotaExhausted && nowUTC > _tickerQuotaResetAt){
+    _tickerQuotaExhausted = false;
+    console.log('[Ticker] Quota reset — new day');
+  }
+  return !_tickerQuotaExhausted;
+}
+
+function markQuotaExhausted() {
+  _tickerQuotaExhausted = true;
+  // reset flag เที่ยงคืน UTC
+  const tomorrow = new Date();
+  tomorrow.setUTCHours(24,0,0,0);
+  _tickerQuotaResetAt = tomorrow.getTime();
+  console.warn('[Ticker] API quota exhausted — stop until midnight UTC');
+  // แสดงใน ticker ว่า quota หมด
+  const inner = document.getElementById('tickerInner1');
+  if(inner && !inner.dataset.quotaWarned){
+    inner.dataset.quotaWarned = '1';
+    // ไม่ reset inner content — ยังแสดงราคาเก่าต่อไป
+  }
+}
+
 const _tickerCache = {}, _tickerCacheTime = {};
-const TICKER_TTL = 15 * 60 * 1000; // cache 15 นาที (อัปเดตทุก 15 นาที)
+const TICKER_TTL = 30 * 60 * 1000; // cache 30 นาที (ลดจาก 15 เพื่อประหยัด quota)
 
 async function fetchTickerSingle(sym) {
   // ถ้ามีราคาใน prices (จากพอร์ต) ใช้เลย ไม่ดึงซ้ำ
-  if (prices[sym] && prices[sym].current) {
+  if (prices[sym]?.current) {
     tickerPrices[sym] = {
       price: prices[sym].current,
       change: prices[sym].change || 0,
       changePct: prices[sym].changePct || 0
     };
-    return;
+    return true; // สำเร็จจาก cache
   }
-  // เช็ค ticker cache
+  // เช็ค ticker cache ก่อน
   const now = Date.now();
-  if (_tickerCache[sym] && now - (_tickerCacheTime[sym] || 0) < TICKER_TTL) {
+  if (_tickerCache[sym] && now - (_tickerCacheTime[sym]||0) < TICKER_TTL) {
     tickerPrices[sym] = _tickerCache[sym];
-    return;
+    return true; // สำเร็จจาก cache
   }
+  // ตรวจสอบ quota ก่อนยิง request
+  if(!isTickerQuotaOK()) return false;
+
   try {
-    // ใช้ rateLimitedFetch — รวม quota pool กับ portfolio
     const res = await rateLimitedFetch(
       `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(sym)}&apikey=${TD_KEY}`
     );
+    // detect 429 จาก HTTP status
+    if(res.status === 429) {
+      markQuotaExhausted();
+      return false;
+    }
     const q = await res.json();
-    if (q.status === 'error' || q.code || !q.close) {
-      console.warn(`Ticker ${sym}: ${q.message || q.code || 'no data'}`);
-      return;
+    // detect quota หมดจาก message
+    if(q.code === 429 || (q.message||'').toLowerCase().includes('run out') ||
+       (q.message||'').toLowerCase().includes('credits')) {
+      markQuotaExhausted();
+      return false;
+    }
+    if (q.status === 'error' || !q.close) {
+      console.warn(`Ticker ${sym}: ${q.message || 'no data'}`);
+      return false;
     }
     const cur = parseFloat(q.close);
     const prev = parseFloat(q.previous_close) || cur;
-    const data = { price: cur, change: cur - prev, changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0 };
+    const data = { price: cur, change: cur-prev, changePct: prev>0?((cur-prev)/prev*100):0 };
     tickerPrices[sym] = data;
     _tickerCache[sym] = data;
     _tickerCacheTime[sym] = now;
+    return true;
   } catch(e) {
     console.warn(`Ticker ${sym}:`, e.message);
+    return false;
   }
 }
 
-// ดึงทีละตัวผ่าน queue (rateLimitedFetch จัดการ spacing อัตโนมัติ)
 async function fetchTickerParallel(symbols) {
-  // กรอง symbols ที่มีราคาจากพอร์ตแล้ว เพื่อประหยัด request
   const portSyms = new Set(holdings.map(h => h.ticker));
-  const needFetch = symbols.filter(s => !portSyms.has(s));
-  const fromPort  = symbols.filter(s => portSyms.has(s));
-  // copy จาก prices ทันที
-  fromPort.forEach(s => {
-    if (prices[s]) tickerPrices[s] = { price: prices[s].current, change: prices[s].change||0, changePct: prices[s].changePct||0 };
+  // copy ราคาจากพอร์ตทันที (ไม่เสีย quota)
+  symbols.forEach(s => {
+    if(prices[s]?.current) {
+      tickerPrices[s] = { price:prices[s].current, change:prices[s].change||0, changePct:prices[s].changePct||0 };
+    }
   });
   renderTicker1();
-  // fetch watchlist ที่ไม่อยู่ในพอร์ต — ผ่าน queue อัตโนมัติ
+
+  // fetch เฉพาะที่ยังไม่มีและ quota ยังเหลือ
+  const needFetch = symbols.filter(s => !portSyms.has(s) && !_tickerCache[s]);
   for (const sym of needFetch) {
-    await fetchTickerSingle(sym);
-    renderTicker1();
-    // ไม่ต้อง sleep เพราะ rateLimitedFetch จัดการ spacing แล้ว
+    if(!isTickerQuotaOK()) {
+      console.warn('[Ticker] Quota exhausted — stop fetching remaining', symbols.length - symbols.indexOf(sym), 'symbols');
+      break; // หยุดทันทีไม่ยิง request เพิ่ม
+    }
+    const ok = await fetchTickerSingle(sym);
+    if(ok) renderTicker1();
   }
 }
 
@@ -1710,13 +1771,46 @@ function renderTicker1() {
   inner.style.animationDuration = duration + 's';
 }
 
+// ── TICKER: Shared Cache จาก Firestore ──
+// Actions อัปเดตทุก 20 นาที → ทุก user ใช้ข้อมูลเดียวกัน ไม่กิน quota แยก
+let _firestoreTickerLoaded = false;
+let _firestoreTickerTime = 0;
+const FIRESTORE_TICKER_TTL = 22 * 60 * 1000; // cache 22 นาที (slot Actions = 20 นาที)
+
+async function loadTickerFromFirestore() {
+  const now = Date.now();
+  // ใช้ cache ถ้ายังไม่หมดอายุ
+  if(_firestoreTickerLoaded && now - _firestoreTickerTime < FIRESTORE_TICKER_TTL) return;
+  try {
+    const snap = await getDoc(doc(db, 'marketData', 'tickerPrices'));
+    if(!snap.exists()) {
+      console.warn('[Ticker] Firestore cache not found — Actions ยังไม่รัน');
+      return;
+    }
+    const data = snap.data();
+    const cached = data.prices || {};
+    // นำราคาจาก Firestore ใส่ tickerPrices
+    Object.entries(cached).forEach(([sym, p]) => {
+      tickerPrices[sym] = p;
+      // บันทึกใน local cache ด้วย
+      _tickerCache[sym] = p;
+      _tickerCacheTime[sym] = now;
+    });
+    _firestoreTickerLoaded = true;
+    _firestoreTickerTime = now;
+    console.log(`[Ticker] Loaded ${Object.keys(cached).length} prices from Firestore (updated: ${data.thaiTime})`);
+  } catch(e) {
+    console.warn('[Ticker] Firestore load error:', e.message);
+  }
+}
+
 async function loadTickerData() {
   const allSyms = [...TICKER_WATCHLIST.map(w => w.s)];
   holdings.forEach(h => {
     if (h.type === 'US' && !allSyms.includes(h.ticker)) allSyms.push(h.ticker);
   });
 
-  // Step 1: เอาราคาพอร์ตที่มีอยู่แล้วมาแสดงทันที
+  // Step 1: copy ราคาพอร์ตทันที (ไม่เสีย quota)
   holdings.forEach(h => {
     if (prices[h.ticker]) {
       tickerPrices[h.ticker] = {
@@ -1726,10 +1820,22 @@ async function loadTickerData() {
       };
     }
   });
-  renderTicker1(); // แสดงทันทีก่อน
+  // copy จาก local cache ก่อน
+  allSyms.forEach(s => {
+    if(_tickerCache[s] && !tickerPrices[s]) tickerPrices[s] = _tickerCache[s];
+  });
+  renderTicker1(); // แสดงทันที (อาจว่างถ้าไม่มี cache)
 
-  // Step 2: fetch watchlist ทีละตัว 2 วินาที ทยอยขึ้นแถบ
-  await fetchTickerParallel(allSyms);
+  // Step 2: โหลดจาก Firestore shared cache (หลัก)
+  await loadTickerFromFirestore();
+  renderTicker1(); // update ด้วยราคาจาก Firestore
+
+  // Step 3: fallback — ถ้า Firestore ว่าง + quota ยังเหลือ ดึงเองเฉพาะที่ขาด
+  const missing = allSyms.filter(s => !tickerPrices[s]);
+  if(missing.length > 0 && isTickerQuotaOK()) {
+    console.log(`[Ticker] Firestore missing ${missing.length} symbols — fallback to direct fetch`);
+    await fetchTickerParallel(missing);
+  }
 }
 
 function renderTicker2() {
@@ -1792,15 +1898,63 @@ async function loadTickerRecs() {
   renderTicker2();
 }
 
+let _tickerUnsubscribe = null;
+
 function startTickerUpdates() {
-  // โหลดครั้งแรก
-  loadTickerData();
   loadTickerRecs();
-  // อัปเดตทุก 5 นาที
-  if (tickerTimer) clearInterval(tickerTimer);
-  tickerTimer = setInterval(() => {
+
+  // ── Firestore realtime listener ──
+  // เมื่อ Actions อัปเดต marketData/tickerPrices
+  // ทุก browser จะได้รับทันทีอัตโนมัติ ไม่ต้อง poll
+  if(_tickerUnsubscribe) _tickerUnsubscribe();
+  try {
+    _tickerUnsubscribe = onSnapshot(
+      doc(db, 'marketData', 'tickerPrices'),
+      (snap) => {
+        if(!snap.exists()) {
+          // ยังไม่มีข้อมูล — โหลดครั้งแรกด้วย fallback
+          loadTickerData();
+          return;
+        }
+        const data = snap.data();
+        const cached = data.prices || {};
+        const now = Date.now();
+        let count = 0;
+        Object.entries(cached).forEach(([sym, p]) => {
+          tickerPrices[sym] = p;
+          _tickerCache[sym] = p;
+          _tickerCacheTime[sym] = now;
+          count++;
+        });
+        _firestoreTickerLoaded = true;
+        _firestoreTickerTime = now;
+        // copy ราคาพอร์ตทับถ้ามีข้อมูลสดกว่า
+        holdings.forEach(h => {
+          if(prices[h.ticker]?.current) {
+            tickerPrices[h.ticker] = {
+              price: prices[h.ticker].current,
+              change: prices[h.ticker].change || 0,
+              changePct: prices[h.ticker].changePct || 0
+            };
+          }
+        });
+        renderTicker1();
+        console.log(`[Ticker] Firestore update: ${count} prices (${data.thaiTime || ''})`);
+      },
+      (err) => {
+        console.warn('[Ticker] Firestore listener error:', err.message);
+        // fallback: โหลดด้วย direct fetch
+        loadTickerData();
+      }
+    );
+  } catch(e) {
+    console.warn('[Ticker] Cannot use realtime — fallback to polling:', e.message);
     loadTickerData();
-  }, 15 * 60 * 1000); // อัปเดตทุก 15 นาที (~120 req/ชั่วโมง ปลอดภัยใน 800 limit)
+    if (tickerTimer) clearInterval(tickerTimer);
+    tickerTimer = setInterval(() => {
+      loadTickerData();
+    }, 22 * 60 * 1000); // poll ทุก 22 นาที ถ้า realtime ไม่ได้
+  }
 }
 
 
