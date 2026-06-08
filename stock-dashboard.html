@@ -995,11 +995,11 @@ window.addHolding = async () => {
   else { saveGuestHoldings(); showGuestSaveBanner(); }
   closeModal('holdingModal'); showToast('✅ เพิ่ม '+ticker);
   ['inputTicker','inputQty','inputBuyPrice','inputName'].forEach(id=>document.getElementById(id).value='');
-  // render ทันทีก่อน (ให้เห็น skeleton แล้วค่อยโหลดราคา)
+  // render ทันทีก่อน (skeleton)
   renderHoldings();
-  // fetch ราคา async ไม่รอ (ผ่าน queue)
+  // fetch ราคาตัวใหม่ตรงๆ ไม่ผ่าน queue (เร็วกว่า)
   delete _quoteCache[ticker]; delete _quoteCacheTime[ticker];
-  fetchPrice(ticker, type).then(() => {
+  fetchPriceDirect(ticker, type).then(() => {
     renderHoldings();
     if(isPremium()) renderAICards();
   });
@@ -1123,6 +1123,41 @@ async function fetchTwelveData(ticker, type) {
     }
   };
 }
+// Direct fetch ไม่ผ่าน queue — ใช้ตอนเพิ่มหุ้นใหม่ ต้องการผล fast
+async function fetchPriceDirect(ticker, type){
+  const symbol = getTwelveSymbol(ticker, type);
+  try {
+    const res = await fetch(
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&apikey=${TD_KEY}`,
+      { signal: AbortSignal.timeout(12000) }
+    );
+    const q = await res.json();
+    if(!q || q.status === 'error' || !q.close) {
+      console.warn('fetchPriceDirect', ticker, q?.message || 'no data');
+      prices[ticker] = null;
+      return;
+    }
+    const cur = parseFloat(q.close);
+    const prev = parseFloat(q.previous_close) || cur;
+    const high52 = parseFloat(q.fifty_two_week?.high || q['52_week']?.high || cur);
+    const low52 = parseFloat(q.fifty_two_week?.low || q['52_week']?.low || cur);
+    prices[ticker] = {
+      current: cur, prev, change: cur-prev,
+      changePct: prev>0 ? ((cur-prev)/prev*100) : 0,
+      high52: isNaN(high52) ? cur : high52,
+      low52: isNaN(low52) ? cur : low52,
+      dayHigh: parseFloat(q.high)||cur,
+      dayLow: parseFloat(q.low)||cur
+    };
+    // บันทึก cache ด้วย
+    _quoteCache[ticker] = q;
+    _quoteCacheTime[ticker] = Date.now();
+  } catch(e) {
+    console.warn('fetchPriceDirect error', ticker, e.message);
+    if(!prices[ticker]) prices[ticker] = null;
+  }
+}
+
 async function fetchPrice(ticker, type){
   const result = await fetchTwelveData(ticker, type);
   if(result){
