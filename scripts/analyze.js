@@ -601,38 +601,70 @@ async function collectAndCachePrices() {
 
 async function main() {
   const now = new Date();
-  const thaiHour = parseInt(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok', hour: 'numeric', hour12: false }));
+  const utcHour = now.getUTCHours();
+  const utcMin = now.getUTCMinutes();
   const thaiTime = now.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });
-
-  console.log('🚀 StockAI Auto Analysis');
-  console.log('📅 Time (Bangkok):', thaiTime);
-  console.log('🕐 Hour:', thaiHour);
-  console.log('🔑 TD_KEY_2:', TD_KEY_2 ? '✅ set' : '❌ not set');
-
   const isManual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
-  const isMorning = thaiHour >= 7 && thaiHour <= 9;
-  const isTickerMode = process.env.RUN_MODE === 'ticker'; // mode พิเศษสำหรับ ticker
+  const inputMode = (process.env.INPUT_MODE || '').toLowerCase();
 
-  if(isTickerMode) {
-    // mode: ticker ทุก 20 นาที → ดึงราคา watchlist + portfolio ทุก user
-    await Promise.all([
-      fetchWatchlistPrices(),          // watchlist 30 ตัว → marketData/tickerPrices
-      collectAndCachePrices()          // portfolio unique tickers → marketData/portfolioPrices
-    ]);
-  } else if(isManual || isMorning) {
-    // mode: วิเคราะห์ทั้งหมด 08:00
-    await analyzeWatchlistAndRecommend();
-    if(TD_KEY_2) await fetchWatchlistPrices();
-    await collectAndCachePrices();
+  console.log(`
+🚀 StockAI Auto Analysis`);
+  console.log(`📅 Bangkok: ${thaiTime}`);
+  console.log(`🕐 UTC: ${utcHour}:${String(utcMin).padStart(2,'0')}`);
+  console.log(`🔑 TD_KEY:${TD_KEY?'✅':'❌'} TD_KEY_2:${TD_KEY_2?'✅':'❌'}`);
+
+  // ── ตัดสินใจ mode ──
+  let mode = 'ticker';
+  if(isManual && inputMode) {
+    mode = inputMode;
+  } else if(utcHour === 22) {
+    mode = 'close';   // ตี 5 ไทย: เก็บราคาปิด
+  } else if(utcHour === 1) {
+    mode = 'morning'; // 08:00 ไทย: AI analysis
+  } else if(utcHour === 13 && utcMin === 0) {
+    mode = 'news';    // 20:00 ไทย: ข่าวสาร 1 ทุ่ม
+  } else if((utcHour >= 14 && utcHour <= 20) || (utcHour === 13 && utcMin >= 30)) {
+    mode = 'ticker';  // ตลาดเปิด: ราคา real-time
   } else {
-    // mode: วิเคราะห์ portfolios 21:00
-    await analyzeUserPortfolios();
-    await collectAndCachePrices(); // อัปเดตราคาหลัง analyze ด้วย
+    mode = 'close';   // นอกเวลา: เก็บราคา
   }
 
-  console.log(`\n🎉 All done!`);
-}
+  console.log(`🎯 Mode: ${mode}
+`);
 
+  switch(mode) {
+    case 'close':
+      console.log('📦 เก็บราคาปิดตลาด US → Firestore');
+      await collectAndCachePrices();
+      if(TD_KEY_2) await fetchWatchlistPrices();
+      break;
+    case 'morning':
+      console.log('🌅 AI analysis + recommendations');
+      await analyzeWatchlistAndRecommend();
+      if(TD_KEY_2) await fetchWatchlistPrices();
+      await collectAndCachePrices();
+      break;
+    case 'news':
+      console.log('📰 ข่าวสาร 1 ทุ่ม');
+      await analyzeUserPortfolios();
+      await collectAndCachePrices();
+      break;
+    case 'ticker':
+      console.log('📊 ราคา real-time ช่วงตลาดเปิด');
+      await Promise.all([
+        TD_KEY_2 ? fetchWatchlistPrices() : Promise.resolve(),
+        collectAndCachePrices()
+      ]);
+      break;
+    default:
+      console.log('🔄 วิเคราะห์ portfolios');
+      await analyzeUserPortfolios();
+      await collectAndCachePrices();
+  }
+
+  console.log(`
+🎉 Done!`);
+}
 main().catch(e => {
   console.error('Fatal error:', e);
   process.exit(1);
