@@ -37,8 +37,13 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .auth-error{background:rgba(255,77,109,0.1);border:1px solid rgba(255,77,109,0.3);border-radius:8px;padding:10px 14px;font-size:0.78rem;color:var(--red);margin-bottom:14px;display:none;}
 .auth-error.show{display:block;}
 
+/* SKELETON SHIMMER */
+.skel{display:inline-block;height:12px;border-radius:4px;background:linear-gradient(90deg,var(--surface2) 25%,var(--border) 50%,var(--surface2) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;vertical-align:middle;}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.loading-price{display:inline-flex;align-items:center;}
+.loading-price .skel{height:14px;width:60px;}
+
 /* ── TICKER TAPE ── */
-.ticker-wrap{display:flex;align-items:center;background:var(--surface);border-bottom:1px solid var(--border);height:36px;overflow:hidden;position:sticky;top:57px;z-index:90;}
 .ticker-wrap-2{background:rgba(247,201,72,0.06);border-top:1px solid rgba(247,201,72,0.15);border-bottom:1px solid rgba(247,201,72,0.15);top:93px;}
 .ticker-label{flex-shrink:0;font-family:'Space Mono',monospace;font-size:0.6rem;font-weight:700;padding:0 10px;color:var(--accent);border-right:1px solid var(--border);height:100%;display:flex;align-items:center;background:var(--surface2);letter-spacing:1px;}
 .ticker-label-2{color:var(--gold);border-right-color:rgba(247,201,72,0.2);}
@@ -740,18 +745,8 @@ onAuthStateChanged(auth, async (user) => {
     await initUserData();          // โหลด holdings จาก Firestore
     await syncGuestToFirestore();  // sync guest holdings ถ้ามี
     await fetchFXRate();
-    // fetch ราคาทันทีหลัง holdings โหลด (ผ่าน priority queue)
-    if(holdings.length){
-      renderHoldings(); // แสดง skeleton ก่อน
-      for(const h of holdings){
-        await fetchPrice(h.ticker, h.type);
-        renderHoldings();
-      }
-      document.getElementById('lastUpdate').textContent =
-        new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
-    } else {
-      renderHoldings();
-    }
+    renderHoldings(); // แสดง skeleton ทันที
+    if(holdings.length) fetchAllPrices(); // โหลดราคาแบบ parallel (ไม่ await รอ)
     if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
     if(isPremium()){ renderAICards(); }
     if(getKey()) setupAutoSchedule();
@@ -768,10 +763,8 @@ onAuthStateChanged(auth, async (user) => {
     holdings = saved ? JSON.parse(saved) : [];
     updateGuestUI();
     await fetchFXRate();
-    if(holdings.length){
-      for(const h of holdings){ await fetchPrice(h.ticker,h.type); renderHoldings(); await sleep(300); }
-      document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
-    } else { renderHoldings(); }
+    renderHoldings(); // skeleton ทันที
+    if(holdings.length) fetchAllPrices(); // non-blocking
     startTickerUpdates();
     renderLockedAI();
     startCentralRefresh(); // ใช้ central refresh timer ตัวเดียว
@@ -1092,12 +1085,47 @@ async function fetchTwelveData(ticker, type) {
     }
   };
 }
-async function fetchPrice(ticker,type){
-  const result=await fetchTwelveData(ticker,type);
+async function fetchPrice(ticker, type){
+  // ถ้ามี cache เก่าอยู่แล้ว แสดงทันที (อัปเดตทีหลัง)
+  if(_quoteCache[ticker]){
+    const q = _quoteCache[ticker];
+    const cur = parseFloat(q.close);
+    const prev = parseFloat(q.previous_close) || cur;
+    const c52 = _52wCache[ticker];
+    prices[ticker] = {
+      current: cur, prev, change: cur-prev,
+      changePct: prev>0 ? ((cur-prev)/prev*100) : 0,
+      high52: c52?.high52 || cur, low52: c52?.low52 || cur,
+      dayHigh: parseFloat(q.high)||cur, dayLow: parseFloat(q.low)||cur,
+      stale: true // mark ว่าเป็นข้อมูลเก่า
+    };
+    renderHoldings(); // แสดงทันที
+  }
+  const result = await fetchTwelveData(ticker, type);
   if(result){
-    const m=result.meta; const cur=m.regularMarketPrice; const prev=m.chartPreviousClose||cur;
-    prices[ticker]={current:cur,prev,change:cur-prev,changePct:prev>0?((cur-prev)/prev*100):0,high52:m.fiftyTwoWeekHigh||cur,low52:m.fiftyTwoWeekLow||cur,dayHigh:m.regularMarketDayHigh||cur,dayLow:m.regularMarketDayLow||cur};
-  }else{ prices[ticker]=null; }
+    const m = result.meta; const cur = m.regularMarketPrice; const prev = m.chartPreviousClose||cur;
+    prices[ticker] = {current:cur,prev,change:cur-prev,changePct:prev>0?((cur-prev)/prev*100):0,high52:m.fiftyTwoWeekHigh||cur,low52:m.fiftyTwoWeekLow||cur,dayHigh:m.regularMarketDayHigh||cur,dayLow:m.regularMarketDayLow||cur};
+  } else if(!prices[ticker]) {
+    prices[ticker] = null;
+  }
+}
+
+// โหลดทุกหุ้นพร้อมกัน stagger 1 วินาที/ตัว
+// ไม่รอ queue — แต่ละตัวเริ่มต้นพร้อมกัน
+async function fetchAllPrices(){
+  if(!holdings.length) return;
+  await fetchFXRate();
+  // เริ่มทุกตัวพร้อมกัน stagger 1 วินาที
+  const promises = holdings.map((h, i) =>
+    new Promise(r => setTimeout(async () => {
+      await fetchPrice(h.ticker, h.type);
+      renderHoldings();
+      r();
+    }, i * 1000)) // stagger 1 วินาที/ตัว
+  );
+  await Promise.all(promises);
+  const el = document.getElementById('lastUpdate');
+  if(el) el.textContent = new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
 }
 let _fxCacheTime = 0;
 async function fetchFXRate(){
@@ -1129,28 +1157,19 @@ function startCentralRefresh() {
   // = ~4 req ทุก 10 นาที + ticker 2 req ทุก 15s = ปลอดภัย
   _centralRefreshTimer = setInterval(async () => {
     if (!holdings.length) return;
-    await fetchFXRate();
-    for (const h of holdings) {
-      await fetchPrice(h.ticker, h.type);
-      renderHoldings();
-    }
-    const el = document.getElementById('lastUpdate');
-    if (el) el.textContent = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+    fetchAllPrices(); // non-blocking
   }, 10 * 60 * 1000); // 10 นาที
 }
 
 window.refreshPrices = async () => {
   showToast('🔄 อัปเดตราคา...');
-  // force clear quote cache เพื่อดึงราคาใหม่จริงๆ
-  holdings.forEach(h => { delete _quoteCache[h.ticker]; delete _quoteCacheTime[h.ticker]; });
+  // clear cache เพื่อดึงใหม่จริงๆ
+  holdings.forEach(h => {
+    delete _quoteCache[h.ticker];
+    delete _quoteCacheTime[h.ticker];
+  });
   _fxCacheTime = 0;
-  await fetchFXRate();
-  for (const h of holdings) {
-    await fetchPrice(h.ticker, h.type);
-    renderHoldings();
-  }
-  const el = document.getElementById('lastUpdate');
-  if (el) el.textContent = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+  await fetchAllPrices();
   showToast('✅ อัปเดตแล้ว');
 };
 
@@ -1177,8 +1196,8 @@ function renderHoldings(){
       <td><span class="type-badge ${tC}">${tL}</span></td>
       <td>${h.qty.toLocaleString()}</td>
       <td>$${h.buyPrice.toFixed(2)}</td>
-      <td style="color:var(--blue)">${p&&ath52>0?'$'+ath52.toFixed(2):'--'}</td>
-      <td>${p?`<span style="color:${p.change>=0?'var(--green)':'var(--red)'}">$${p.current.toFixed(2)}<br><span style="font-size:0.62rem">${p.change>=0?'▲':'▼'} ${Math.abs(p.changePct).toFixed(2)}%</span></span>`:'<span class="loading-price">กำลังโหลด...</span>'}</td>
+      <td style="color:var(--blue)">${p&&ath52>0?'$'+ath52.toFixed(2):(prices[h.ticker]===undefined?`<span class='skel' style='width:50px'></span>`:'--')}</td>
+      <td>${p?`<span style="color:${p.change>=0?'var(--green)':'var(--red)'}">$${p.current.toFixed(2)}<br><span style="font-size:0.62rem">${p.change>=0?'▲':'▼'} ${Math.abs(p.changePct).toFixed(2)}%</span></span>`:`<span class='loading-price'><span class='skel' style='width:60px'></span></span>`}</td>
       <td>${p&&ath52>0?`<span style="color:#ff9f43">${athDiffTHB>0?'฿'+athDiffTHB.toLocaleString('th-TH',{maximumFractionDigits:0}):'฿0'}<br><span style="font-size:0.62rem;color:#ff9f43">▼ ${athPct.toFixed(1)}% จาก High</span></span>`:'--'}</td>
       <td>${p?'$'+curr.toFixed(2):'--'}</td>
       <td style="color:var(--gold)">${p&&fxRate>0?'฿'+(curr*fxRate).toLocaleString('th-TH',{maximumFractionDigits:0}):'--'}</td>
