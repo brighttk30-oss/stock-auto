@@ -1611,6 +1611,12 @@ function updateAlertTickerSelect(){
 // ══════════════════════════════════════════════════
 // GUEST MODE FUNCTIONS
 // ══════════════════════════════════════════════════
+function showAuthScreen(){
+  // แสดง auth screen เพื่อ login/สมัคร
+  document.getElementById('authScreen').classList.remove('hidden');
+  document.getElementById('authScreen').style.zIndex = '2000';
+}
+
 function saveGuestHoldings(){
   localStorage.setItem('guest_holdings', JSON.stringify(holdings));
 }
@@ -1625,7 +1631,7 @@ function updateGuestUI(){
     banner.innerHTML = `
       <span>📱 <b style="color:var(--blue)">โหมดทดลอง</b> — ข้อมูลเก็บในเครื่องนี้เท่านั้น ปิด browser ข้อมูลหาย</span>
       <div style="display:flex;gap:8px;">
-        <button onclick="openModal('authModal')" style="background:var(--blue);color:#fff;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:0.72rem;font-weight:700;">🔑 เข้าสู่ระบบ / สมัครฟรี</button>
+        <button onclick="showAuthScreen()" style="background:var(--blue);color:#fff;border:none;padding:5px 14px;border-radius:6px;cursor:pointer;font-size:0.72rem;font-weight:700;">🔑 เข้าสู่ระบบ / สมัครฟรี</button>
         <button onclick="this.parentElement.parentElement.remove()" style="background:transparent;border:none;cursor:pointer;color:var(--text3);font-size:1rem;">✕</button>
       </div>`;
     // ใส่หลัง ticker wrap
@@ -1638,6 +1644,17 @@ function updateGuestUI(){
   if(avatar){ avatar.textContent='?'; avatar.style.background='var(--border)'; }
   const badge = document.getElementById('userPlanBadge');
   if(badge){ badge.textContent='GUEST'; badge.className='plan-badge plan-free'; }
+  // เพิ่มปุ่ม login ใน header
+  const hdr = document.querySelector('.header-right');
+  if(hdr && !document.getElementById('guestLoginBtn')){
+    const btn = document.createElement('button');
+    btn.id = 'guestLoginBtn';
+    btn.className = 'btn';
+    btn.style.cssText = 'background:var(--blue);font-size:0.75rem;padding:6px 14px;';
+    btn.textContent = '🔑 เข้าสู่ระบบ';
+    btn.onclick = showAuthScreen;
+    hdr.insertBefore(btn, hdr.firstChild);
+  }
   const menuName = document.getElementById('menuUserName');
   if(menuName) menuName.textContent = 'ผู้เยี่ยมชม';
   const menuEmail = document.getElementById('menuUserEmail');
@@ -1647,7 +1664,7 @@ function updateGuestUI(){
 function showGuestSaveBanner(){
   // แสดง toast พร้อม hint สมัคร
   const t = document.getElementById('toast');
-  t.innerHTML = '✅ เพิ่มแล้ว — <span style="text-decoration:underline;cursor:pointer;" onclick="openModal(\'authModal\')">สมัครฟรีเพื่อบันทึกถาวร</span>';
+  t.innerHTML = '✅ เพิ่มแล้ว — <span style="text-decoration:underline;cursor:pointer;" onclick="showAuthScreen()">สมัครฟรีเพื่อบันทึกถาวร</span>';
   t.className = 'toast show';
   setTimeout(()=>{ t.classList.remove('show'); t.innerHTML=''; }, 5000);
 }
