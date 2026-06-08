@@ -600,7 +600,21 @@ let autoTimer = null;
 let newsCountdown = null;
 let dbUnsubscribe = null;
 
-function isPremium(){ return (userProfile?.plan === 'premium' || userProfile?.plan === 'trial') && userProfile?.planExpiry > Date.now(); }
+function getExpiry(profile){
+  // รองรับ Firestore Timestamp object และ plain number
+  const exp = profile?.planExpiry;
+  if(!exp) return 0;
+  if(typeof exp === 'number') return exp;
+  if(typeof exp === 'object' && exp.toDate) return exp.toDate().getTime();
+  if(typeof exp === 'object' && exp.seconds) return exp.seconds * 1000;
+  return Number(exp) || 0;
+}
+function isPremium(){
+  if(!userProfile) return false;
+  const plan = userProfile.plan;
+  const expiry = getExpiry(userProfile);
+  return (plan === 'premium' || plan === 'trial') && expiry > Date.now();
+}
 function isAdmin(){ return currentUser?.email === ADMIN_EMAIL || userProfile?.isAdmin === true; }
 function getKey(){ return localStorage.getItem('or_key_'+currentUser?.uid)||''; }
 function saveKey(k){ localStorage.setItem('or_key_'+currentUser?.uid, k); }
@@ -746,12 +760,18 @@ onAuthStateChanged(auth, async (user) => {
     await initUserData();          // โหลด holdings จาก Firestore
     await syncGuestToFirestore();  // sync guest holdings ถ้ามี
     await fetchFXRate();
+    // reset premium state tracker เพื่อให้ hook render AI ถูกต้อง
+    _lastPremiumState = null;
     renderHoldings(); // แสดง skeleton ทันที
-    if(holdings.length) fetchAllPrices(); // โหลดราคาแบบ parallel (ไม่ await รอ)
-    if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
-    if(isPremium()){ renderAICards(); }
+    if(holdings.length) fetchAllPrices(); // โหลดราคา non-blocking
+    if(isPremium()){
+      renderAICards();
+      if(lastNewsTime > 0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+    } else {
+      renderLockedAI();
+    }
     if(getKey()) setupAutoSchedule();
-    startTickerUpdates(); // ticker เริ่มหลัง portfolio (ใช้ queue เดียวกัน)
+    startTickerUpdates();
     startCentralRefresh();
   } else {
     // GUEST MODE: แสดงหน้าหลักทันที ไม่บังคับ login
@@ -764,11 +784,12 @@ onAuthStateChanged(auth, async (user) => {
     holdings = saved ? JSON.parse(saved) : [];
     updateGuestUI();
     await fetchFXRate();
+    _lastPremiumState = null; // reset
     renderHoldings(); // skeleton ทันที
+    renderLockedAI(); // แสดง lock/teaser ทันที
     if(holdings.length) fetchAllPrices(); // non-blocking
     startTickerUpdates();
-    renderLockedAI();
-    startCentralRefresh(); // ใช้ central refresh timer ตัวเดียว
+    startCentralRefresh();
   }
 });
 
@@ -778,6 +799,8 @@ function updateUserUI(){
   if(guestBanner) guestBanner.remove();
   const guestBtn = document.getElementById('guestLoginBtn');
   if(guestBtn) guestBtn.remove();
+  // reset premium state tracker ให้ hook render AI ใหม่
+  if(typeof _lastPremiumState !== 'undefined') _lastPremiumState = null;
   const name = userProfile?.name || currentUser?.displayName || currentUser?.email || 'User';
   const initial = name.charAt(0).toUpperCase();
   document.getElementById('userAvatar').textContent = initial;
@@ -850,15 +873,22 @@ async function initUserData(){
   } catch(e){ console.warn('initUserData:', e.message); }
 
   // subscribe realtime updates
+  // หมายเหตุ: ไม่ render AI ใน callback เพราะ userProfile อาจยังไม่พร้อม
+  // AI จะ render หลัง login flow เสร็จแล้วเท่านั้น
   dbUnsubscribe = onSnapshot(docRef, (snap) => {
     if(snap.exists()){
       const data = snap.data();
+      const oldLen = holdings.length;
       holdings = data.holdings||[];
       aiCache = data.aiCache||{};
       newsCache = data.newsCache||[];
       lastNewsTime = data.lastNewsTime||0;
       renderHoldings();
-      if(isPremium()){ renderAICards(); if(newsCache.length) renderNews(); }
+      // render AI เฉพาะถ้า userProfile โหลดแล้ว และเป็น premium
+      if(userProfile && isPremium()){
+        renderAICards();
+        if(newsCache.length) renderNews();
+      }
     }
   }, (err) => { console.warn('onSnapshot error:', err.message); });
 }
@@ -965,11 +995,14 @@ window.addHolding = async () => {
   else { saveGuestHoldings(); showGuestSaveBanner(); }
   closeModal('holdingModal'); showToast('✅ เพิ่ม '+ticker);
   ['inputTicker','inputQty','inputBuyPrice','inputName'].forEach(id=>document.getElementById(id).value='');
-  // fetch ราคาทันทีเมื่อเพิ่มหุ้น (ไม่ผ่าน queue ให้ไว)
-  delete _quoteCache[ticker]; delete _quoteCacheTime[ticker]; // clear cache ให้ดึงใหม่
-  await fetchPrice(ticker, type);
+  // render ทันทีก่อน (ให้เห็น skeleton แล้วค่อยโหลดราคา)
   renderHoldings();
-  if(isPremium()) renderAICards();
+  // fetch ราคา async ไม่รอ (ผ่าน queue)
+  delete _quoteCache[ticker]; delete _quoteCacheTime[ticker];
+  fetchPrice(ticker, type).then(() => {
+    renderHoldings();
+    if(isPremium()) renderAICards();
+  });
 };
 window.removeHolding = async (ticker) => {
   if(!confirm('ลบ '+ticker+' ?')) return;
@@ -1322,7 +1355,16 @@ function renderAICards(){
 function renderAnalysis(c){ return `<div class="ai-section"><div class="ai-section-label bull-label">🟢 Bull Case</div><div class="ai-text">${c.bull||'--'}</div></div><div class="ai-section"><div class="ai-section-label bear-label">🔴 Bear Case</div><div class="ai-text">${c.bear||'--'}</div></div><div class="ai-section"><div class="ai-section-label sum-label">⚖️ สรุป</div><div class="ai-text">${c.summary||'--'}</div></div>${c.target?`<div class="target-price">🎯 Target: ${c.target}</div>`:''}`; }
 window.switchTab=(ticker,tab,btn)=>{ document.querySelectorAll(`#aiCard-${ticker} .ai-tab`).forEach(t=>t.classList.remove('active')); btn.classList.add('active'); document.getElementById(`tab-analysis-${ticker}`).classList.toggle('show',tab==='analysis'); document.getElementById(`tab-news-${ticker}`).classList.toggle('show',tab==='news'); };
 window.analyzeOne=async(ticker)=>{
-  if(!isPremium()){ openModal('upgradeModal'); return; }
+  // re-check premium จาก userProfile ที่โหลดล่าสุด
+  if(!currentUser){ openModal('upgradeModal'); return; }
+  if(!isPremium()){
+    // ลอง reload profile ก่อน (อาจ plan เปลี่ยนแต่ยังไม่ได้ refresh)
+    try {
+      const snap = await getDoc(doc(db,'users',currentUser.uid,'profile','data'));
+      if(snap.exists()) userProfile = snap.data();
+    } catch(e) {}
+    if(!isPremium()){ openModal('upgradeModal'); return; }
+  }
   const key=getKey(); if(!key||key.length<20){ showToast('ใส่ OpenRouter Key ก่อน ⚙',true); openSettings(); return; }
   const el=document.getElementById(`tab-analysis-${ticker}`); const badge=document.getElementById(`aiSentiment-${ticker}`);
   if(!el) return;
@@ -1348,7 +1390,14 @@ window.analyzeOne=async(ticker)=>{
   }catch(e){ el.innerHTML=`<div class="ai-text" style="color:var(--red)">⚠️ ${e.message}</div>`; }
 };
 window.analyzeAll=async()=>{
-  if(!isPremium()){ openModal('upgradeModal'); return; }
+  if(!currentUser){ openModal('upgradeModal'); return; }
+  if(!isPremium()){
+    try {
+      const snap = await getDoc(doc(db,'users',currentUser.uid,'profile','data'));
+      if(snap.exists()) userProfile = snap.data();
+    } catch(e) {}
+    if(!isPremium()){ openModal('upgradeModal'); return; }
+  }
   if(!holdings.length){ showToast('เพิ่มหุ้นก่อน',true); return; }
   const key=getKey(); if(!key||key.length<20){ showToast('ใส่ OpenRouter Key ก่อน ⚙',true); openSettings(); return; }
   showToast('🤖 กำลังวิเคราะห์ทั้งหมด...');
@@ -2113,7 +2162,8 @@ function renderPortfolioHistory(){
 
 // hook renderHoldings — รวมทุก side-effect ในที่เดียว
 let _snapTimer = null;
-let _renderLock = false; // ป้องกัน recursion
+let _renderLock = false;
+let _lastPremiumState = null; // track premium state เพื่อไม่ flicker
 const _baseRenderHoldings = renderHoldings;
 window.renderHoldings = function(){
   if(_renderLock) return;
@@ -2123,8 +2173,15 @@ window.renderHoldings = function(){
     renderPieChart();
     checkPriceAlerts();
     updateAlertTickerSelect();
-    // teaser AI: update ทุกครั้งที่ holdings/prices เปลี่ยน
-    if(!isPremium()) renderLockedAI();
+    // เรียก AI render เฉพาะเมื่อ state เปลี่ยน (ป้องกัน flicker)
+    const currentPremium = isPremium();
+    if(currentPremium !== _lastPremiumState){
+      _lastPremiumState = currentPremium;
+      if(!currentPremium) renderLockedAI();
+      else renderAICards();
+    }
+  } catch(e) {
+    console.warn('renderHoldings error:', e.message);
   } finally {
     _renderLock = false;
   }
