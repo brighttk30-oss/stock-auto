@@ -339,7 +339,7 @@ tr:hover td{background:rgba(0,212,170,0.03);}
 <div class="section-title">พอร์ตของฉัน</div>
 <div class="holdings-wrap">
   <div class="holdings-header">
-    <h3>Holdings <span style="color:var(--text3);font-size:0.68rem;">— คลิกแถวเพื่อดูกราฟ</span></h3>
+    <h3>Holdings <span id="holdingsCounter" style="color:var(--text3);font-size:0.68rem;">— คลิกแถวเพื่อดูกราฟ</span></h3>
     <button class="btn btn-outline btn-sm" onclick="refreshPrices()">🔄 อัปเดตราคา</button>
   </div>
   <div style="overflow-x:auto;">
@@ -475,7 +475,7 @@ tr:hover td{background:rgba(0,212,170,0.03);}
 <div id="aiSection">
   <div class="ai-grid" id="aiGrid"><div style="color:var(--text3);font-size:0.78rem;font-family:'Space Mono',monospace;padding:16px;">เพิ่มหุ้นก่อนแล้ว AI จะวิเคราะห์ให้ครับ</div></div>
   <div style="margin-bottom:24px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-    <button class="btn btn-outline btn-sm" onclick="analyzeAll()">🤖 วิเคราะห์ทั้งหมด</button>
+    <button class="btn btn-outline btn-sm" onclick="openAnalyzeSelector()">🤖 เลือกวิเคราะห์ (สูงสุด 5 ตัว)</button>
     <span style="font-size:0.68rem;color:var(--text3);font-family:'Space Mono',monospace;">Bull + Bear + สรุป + แนวรับ/แนวต้าน</span>
   </div>
 </div>
@@ -582,6 +582,22 @@ tr:hover td{background:rgba(0,212,170,0.03);}
     <div class="modal-actions">
       <button class="btn btn-outline btn-sm" onclick="closeModal('alertModal')">ยกเลิก</button>
       <button class="btn" onclick="addPriceAlert()">🔔 ตั้งแจ้งเตือน</button>
+    </div>
+  </div>
+</div>
+
+<!-- ANALYZE SELECTOR MODAL -->
+<div class="modal-overlay" id="analyzeSelectorModal" onclick="if(event.target.id==='analyzeSelectorModal')document.getElementById('analyzeSelectorModal').classList.remove('show')">
+  <div class="modal">
+    <h3>🤖 เลือกหุ้นที่จะวิเคราะห์</h3>
+    <div style="font-size:0.75rem;color:var(--text2);margin-bottom:14px;">เลือกได้สูงสุด 5 ตัว · AI จะวิเคราะห์ Bull/Bear/สรุป พร้อมแนวรับแนวต้าน</div>
+    <div id="analyzeSelectorList" style="max-height:300px;overflow-y:auto;"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+      <span style="font-size:0.75rem;color:var(--text2);">เลือกแล้ว: <b id="analyzeCount" style="color:var(--accent);">0/5</b></span>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('analyzeSelectorModal').classList.remove('show')">ยกเลิก</button>
+        <button class="btn btn-sm" onclick="runSelectedAnalysis()">🤖 วิเคราะห์</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1042,6 +1058,13 @@ window.submitPayment = async () => {
 
 // ── ADD HOLDING ──
 window.addHolding = async () => {
+  // Holdings limit: Guest=5, Free=10, Premium=∞
+  const MAX = isPremium() ? Infinity : (currentUser ? 10 : 5);
+  if(holdings.length >= MAX){
+    if(!currentUser) showToast('Guest เพิ่มได้สูงสุด 5 หุ้น — สมัครฟรีเพิ่มได้ 10 หุ้น', true);
+    else { showToast('Free เพิ่มได้สูงสุด 10 หุ้น', true); setTimeout(()=>openModal('upgradeModal'),800); }
+    return;
+  }
   const ticker=document.getElementById('inputTicker').value.trim().toUpperCase();
   const type=document.getElementById('inputType').value;
   const qty=parseFloat(document.getElementById('inputQty').value);
@@ -1595,22 +1618,46 @@ window.analyzeOne=async(ticker)=>{
     await saveDB();
   }catch(e){ el.innerHTML=`<div class="ai-text" style="color:var(--red)">⚠️ ${e.message}</div>`; }
 };
-window.analyzeAll=async()=>{
+window.openAnalyzeSelector = () => {
   if(!currentUser){ openModal('upgradeModal'); return; }
-  if(!isPremium()){
-    try {
-      const snap = await getDoc(doc(db,'users',currentUser.uid,'profile','data'));
-      if(snap.exists()) userProfile = snap.data();
-    } catch(e) {}
-    if(!isPremium()){ openModal('upgradeModal'); return; }
-  }
+  if(!isPremium()){ openModal('upgradeModal'); return; }
   if(!holdings.length){ showToast('เพิ่มหุ้นก่อน',true); return; }
-  const key=getKey(); if(!key||key.length<20){ showToast('ใส่ OpenRouter Key ก่อน ⚙',true); openSettings(); return; }
-  showToast('🤖 กำลังวิเคราะห์ทั้งหมด...');
-  await fetchNews(true);
-  for(const h of holdings){ await analyzeOne(h.ticker); await sleep(600); }
-  showToast('✅ วิเคราะห์เสร็จแล้ว');
+  if(!getKey()){ showToast('ใส่ OpenRouter Key ก่อน ⚙',true); openSettings(); return; }
+  const modal = document.getElementById('analyzeSelectorModal');
+  const list = document.getElementById('analyzeSelectorList');
+  list.innerHTML = holdings.map(h=>`
+    <label style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface2);border-radius:8px;cursor:pointer;border:1px solid var(--border);margin-bottom:6px;">
+      <input type="checkbox" value="${h.ticker}" class="analyze-cb" style="accent-color:var(--accent);width:16px;height:16px;flex-shrink:0;" onchange="updateAnalyzeCount()">
+      <span style="font-family:'Space Mono',monospace;font-weight:700;color:var(--accent);">${h.ticker}</span>
+      <span style="font-size:0.72rem;color:var(--text2);flex:1;">${h.name||h.type}</span>
+      ${aiCache[h.ticker]?'<span style="font-size:0.6rem;background:rgba(0,212,170,0.1);color:var(--accent);padding:2px 6px;border-radius:4px;">มีแล้ว</span>':''}
+    </label>`).join('');
+  document.getElementById('analyzeCount').textContent = '0/5';
+  // reset disabled
+  document.querySelectorAll('.analyze-cb').forEach(cb=>{ cb.disabled=false; cb.checked=false; cb.closest('label').style.opacity='1'; });
+  modal.classList.add('show');
 };
+
+window.updateAnalyzeCount = () => {
+  const cbs = [...document.querySelectorAll('.analyze-cb:checked')];
+  document.getElementById('analyzeCount').textContent = `${cbs.length}/5`;
+  document.querySelectorAll('.analyze-cb:not(:checked)').forEach(cb=>{
+    cb.disabled = cbs.length>=5;
+    cb.closest('label').style.opacity = cbs.length>=5?'0.5':'1';
+  });
+};
+
+window.runSelectedAnalysis = async () => {
+  const selected = [...document.querySelectorAll('.analyze-cb:checked')].map(cb=>cb.value);
+  if(!selected.length){ showToast('เลือกหุ้นก่อนอย่างน้อย 1 ตัว',true); return; }
+  document.getElementById('analyzeSelectorModal').classList.remove('show');
+  showToast(`🤖 วิเคราะห์ ${selected.length} ตัว...`);
+  await fetchNews(true);
+  for(const ticker of selected){ await analyzeOne(ticker); await sleep(600); }
+  showToast(`✅ วิเคราะห์ครบ ${selected.length} ตัว`);
+};
+
+window.analyzeAll=async()=>{ openAnalyzeSelector(); };
 
 // ── NEWS ──
 async function fetchNews(force=false){
@@ -2559,6 +2606,13 @@ window.renderHoldings = function(){
     renderPieChart();
     checkPriceAlerts();
     updateAlertTickerSelect();
+    // update holdings counter
+    const ctr = document.getElementById('holdingsCounter');
+    if(ctr){
+      const max = isPremium()?'∞':(currentUser?'10':'5');
+      const atLimit = !isPremium() && holdings.length>=(currentUser?10:5);
+      ctr.innerHTML = `<span style="color:${atLimit?'var(--red)':'var(--text3)'};">${holdings.length}/${max}</span> — คลิกแถวเพื่อดูกราฟ`;
+    }
     // เรียก AI render เฉพาะเมื่อ state เปลี่ยน (ป้องกัน flicker)
     const currentPremium = isPremium();
     if(currentPremium !== _lastPremiumState){
