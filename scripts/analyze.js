@@ -487,6 +487,118 @@ async function fetchWatchlistPrices() {
 }
 
 // ── MAIN ──
+// ── COLLECT & CACHE PORTFOLIO PRICES → Firestore ──
+// รวบรวม tickers ทุกตัวที่ users ถือ → ดึงราคา → บันทึก Firestore
+// Browser จะอ่านจาก Firestore แทนยิง Twelve Data โดยตรง
+async function collectAndCachePrices() {
+  console.log(`
+💰 Collecting portfolio prices for all users...`);
+  const now = new Date();
+
+  // รวบรวม unique tickers จากทุก user
+  const usersSnap = await db.collection('users').get();
+  const uniqueTickers = new Map(); // ticker → type
+
+  for(const userDoc of usersSnap.docs) {
+    try {
+      const portSnap = await db.doc(`users/${userDoc.id}/portfolio/main`).get();
+      if(!portSnap.exists) continue;
+      const holdings = portSnap.data().holdings || [];
+      holdings.forEach(h => {
+        if(h.ticker && h.type && !uniqueTickers.has(h.ticker)) {
+          uniqueTickers.set(h.ticker, h.type);
+        }
+      });
+    } catch(e) {}
+  }
+
+  const tickers = [...uniqueTickers.entries()];
+  console.log(`Found ${tickers.length} unique tickers across all users`);
+  if(!tickers.length) return;
+
+  // ดึงราคาทุกตัว (ใช้ TD_KEY หลัก — แยกจาก watchlist)
+  const priceMap = {};
+  const usTickers = tickers.filter(([,t]) => t==='US'||t==='ETF').map(([s])=>s);
+  const goldTicker = tickers.filter(([,t]) => t==='GOLD').map(([s])=>s);
+  const cryptoTickers = tickers.filter(([,t]) => t==='CRYPTO').map(([s])=>s);
+  const thTickers = tickers.filter(([,t]) => t==='TH').map(([s])=>s);
+
+  // ดึง US/ETF/GOLD/CRYPTO batch
+  const allFetch = [
+    ...usTickers,
+    ...goldTicker.map(s => s==='XAUUSD'?'XAU/USD':s),
+    ...cryptoTickers.map(s => s+'/USD'),
+    ...thTickers.map(s => s.includes(':')?s:s+':SET')
+  ];
+
+  for(let i = 0; i < allFetch.length; i += 8) {
+    const batch = allFetch.slice(i, i+8);
+    try {
+      const joined = batch.join(',');
+      const res = await fetch(
+        `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(joined)}&apikey=${TD_KEY}`,
+        { signal: AbortSignal.timeout(20000) }
+      );
+      if(res.status === 429) { console.warn('⚠️ TD_KEY quota exhausted'); break; }
+      const data = await res.json();
+      if(data.message?.toLowerCase().includes('run out')) { console.warn('⚠️ Quota:', data.message); break; }
+
+      const entries = batch.length===1 ? {[batch[0]]:data} : data;
+      Object.entries(entries).forEach(([sym, q]) => {
+        if(!q||q.status==='error'||!q.close) return;
+        const cur = parseFloat(q.close);
+        const prev = parseFloat(q.previous_close)||cur;
+        // map symbol กลับเป็น ticker จริง
+        const ticker = sym.replace('/USD','').replace(':SET','').replace('XAU/USD','XAUUSD');
+        priceMap[ticker] = {
+          current: cur, prev,
+          change: cur-prev,
+          changePct: prev>0?((cur-prev)/prev*100):0,
+          high52: parseFloat(q.fifty_two_week?.high||cur),
+          low52: parseFloat(q.fifty_two_week?.low||cur),
+          dayHigh: parseFloat(q.high)||cur,
+          dayLow: parseFloat(q.low)||cur,
+          updatedAt: now.toISOString()
+        };
+      });
+    } catch(e) { console.warn('Batch error:', e.message); }
+    if(i+8 < allFetch.length) await sleep(800);
+  }
+
+  console.log(`✅ Fetched ${Object.keys(priceMap).length}/${tickers.length} prices`);
+  if(!Object.keys(priceMap).length) return;
+
+  // บันทึกใน Firestore: marketData/portfolioPrices
+  // Browser อ่านจาก document นี้ → แสดงราคาทันที
+  await db.doc('marketData/portfolioPrices').set({
+    prices: priceMap,
+    updatedAt: now.toISOString(),
+    thaiTime: now.toLocaleString('th-TH', {timeZone:'Asia/Bangkok'}),
+    tickerCount: Object.keys(priceMap).length
+  });
+  console.log(`💾 Saved to Firestore: marketData/portfolioPrices`);
+
+  // อัปเดต priceCache ของแต่ละ user ด้วย (fast path)
+  for(const userDoc of usersSnap.docs) {
+    try {
+      const portSnap = await db.doc(`users/${userDoc.id}/portfolio/main`).get();
+      if(!portSnap.exists) continue;
+      const holdings = portSnap.data().holdings||[];
+      const priceCache = {};
+      holdings.forEach(h => {
+        if(priceMap[h.ticker]) priceCache[h.ticker] = priceMap[h.ticker];
+      });
+      if(Object.keys(priceCache).length) {
+        await db.doc(`users/${userDoc.id}/portfolio/main`).set(
+          { priceCache, priceCacheUpdatedAt: now.toISOString() },
+          { merge: true }
+        );
+      }
+    } catch(e) {}
+  }
+  console.log(`✅ Updated priceCache for all users`);
+}
+
 async function main() {
   const now = new Date();
   const thaiHour = parseInt(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok', hour: 'numeric', hour12: false }));
@@ -502,16 +614,20 @@ async function main() {
   const isTickerMode = process.env.RUN_MODE === 'ticker'; // mode พิเศษสำหรับ ticker
 
   if(isTickerMode) {
-    // mode: ดึงราคา watchlist เท่านั้น (รันทุก 20 นาที)
-    await fetchWatchlistPrices();
+    // mode: ticker ทุก 20 นาที → ดึงราคา watchlist + portfolio ทุก user
+    await Promise.all([
+      fetchWatchlistPrices(),          // watchlist 30 ตัว → marketData/tickerPrices
+      collectAndCachePrices()          // portfolio unique tickers → marketData/portfolioPrices
+    ]);
   } else if(isManual || isMorning) {
-    // mode: วิเคราะห์ทั้งหมด + recommendations
+    // mode: วิเคราะห์ทั้งหมด 08:00
     await analyzeWatchlistAndRecommend();
-    // ดึงราคา watchlist ด้วย ถ้ามี TD_KEY_2
     if(TD_KEY_2) await fetchWatchlistPrices();
+    await collectAndCachePrices();
   } else {
-    // mode: วิเคราะห์ portfolios (21:00)
+    // mode: วิเคราะห์ portfolios 21:00
     await analyzeUserPortfolios();
+    await collectAndCachePrices(); // อัปเดตราคาหลัง analyze ด้วย
   }
 
   console.log(`\n🎉 All done!`);
