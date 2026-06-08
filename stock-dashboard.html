@@ -855,14 +855,12 @@ onAuthStateChanged(auth, async (user) => {
       renderLockedAI();
     }
 
-    // sync guest (non-blocking ไม่รอ)
-    syncGuestToFirestore().catch(e=>console.warn('sync guest:', e.message));
-
     if(getKey()) setupAutoSchedule();
     startPortfolioPriceListener(); // ราคาจาก Firestore (เร็ว ไม่กิน quota)
-    startPortfolioPriceListener(); // ราคาจาก Firestore
     startTickerUpdates();
     startCentralRefresh();
+    // sync guest หลังจาก listeners พร้อมแล้ว (non-blocking)
+    setTimeout(() => syncGuestToFirestore().catch(e=>console.warn('sync guest:', e.message)), 2000);
   } else {
     // GUEST MODE: แสดงหน้าหลักทันที ไม่บังคับ login
     currentUser = null;
@@ -876,11 +874,13 @@ onAuthStateChanged(auth, async (user) => {
     _lastPremiumState = null;
     renderHoldings(); // แสดงทันที
     renderLockedAI();
-    // fetch FX + ราคา background
-    fetchFXRate().then(() => {
-      renderHoldings();
-      if(holdings.length) fetchAllPrices();
-    });
+    // fetch FX และราคาพร้อมกัน — ไม่รอ FX ก่อน
+    fetchFXRate().catch(()=>{}); // background ไม่ block
+    if(holdings.length) {
+      // fetch ราคาทันที ไม่รอ FX (FX จะ update ทีหลัง)
+      fetchAllPrices().then(()=> renderHoldings());
+    }
+    startPortfolioPriceListener(); // ราคาจาก Firestore
     startTickerUpdates();
     startCentralRefresh();
   }
@@ -1075,15 +1075,18 @@ window.addHolding = async () => {
   holdings.push({ticker,type,qty,buyPrice,name,addedAt:new Date().toISOString()});
   if(currentUser) await saveDB();
   else { saveGuestHoldings(); showGuestSaveBanner(); }
-  closeModal('holdingModal'); showToast('✅ เพิ่ม '+ticker);
+  closeModal('holdingModal');
   ['inputTicker','inputQty','inputBuyPrice','inputName'].forEach(id=>document.getElementById(id).value='');
-  // render ทันทีก่อน (skeleton)
-  renderHoldings();
-  // fetch ราคาตัวใหม่ตรงๆ ไม่ผ่าน queue (เร็วกว่า)
+  // fetch ราคาก่อน render — ป้องกัน skeleton ค้าง
   delete _quoteCache[ticker]; delete _quoteCacheTime[ticker];
+  showToast('⏳ กำลังโหลดราคา '+ticker+'...');
   fetchPriceDirect(ticker, type).then(() => {
     renderHoldings();
     if(isPremium()) renderAICards();
+    showToast('✅ เพิ่ม '+ticker+' เรียบร้อย');
+  }).catch(() => {
+    renderHoldings(); // แสดงแม้ไม่ได้ราคา
+    showToast('✅ เพิ่ม '+ticker+' (ราคาจะโหลดทีหลัง)');
   });
 };
 window.removeHolding = async (ticker) => {
@@ -1103,7 +1106,7 @@ window.removeHolding = async (ticker) => {
 // ══════════════════════════════════════════════════
 const _reqQueue = [];
 let _reqProcessing = false;
-const REQ_DELAY = 8000; // 8 วินาที/req = 7.5 req/min ปลอดภัย
+const REQ_DELAY = 3000; // 3 วินาที/req — portfolio 5 ตัว = 15s, watchlist ผ่าน Firestore
 
 function rateLimitedFetch(url, priority = 'normal') {
   return new Promise((resolve, reject) => {
@@ -1386,7 +1389,7 @@ async function fetchAllPrices(){
     await Promise.all(pricePromises);
   } else {
     // Firestore ให้ราคาครบแล้ว แค่ update FX
-    fetchFXRate().then(() => renderHoldings());
+    fetchFXRate().then(() => renderHoldings()).catch(()=>{});
   }
   const el = document.getElementById('lastUpdate');
   if(el) el.textContent = new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
@@ -1744,9 +1747,9 @@ function isTickerQuotaOK() {
 
 function markQuotaExhausted() {
   _tickerQuotaExhausted = true;
-  // reset flag เที่ยงคืน UTC
+  // reset flag 07:00 ไทย (= 00:00 UTC) ซึ่งเป็นเวลา quota reset ของ Twelve Data
   const tomorrow = new Date();
-  tomorrow.setUTCHours(24,0,0,0);
+  tomorrow.setUTCHours(24, 0, 0, 0); // เที่ยงคืน UTC = 07:00 ไทย
   _tickerQuotaResetAt = tomorrow.getTime();
   console.warn('[Ticker] API quota exhausted — stop until midnight UTC');
   // แสดงใน ticker ว่า quota หมด
@@ -2021,7 +2024,13 @@ function startPortfolioPriceListener() {
 
       holdings.forEach(h => {
         const p = cached[h.ticker];
+        // ถ้าไม่มีใน Firestore ให้คงราคาเดิมไว้ ไม่ reset
         if(!p) return;
+        // อัปเดตเฉพาะถ้าราคาใหม่กว่าหรือยังไม่มี
+        const existing = prices[h.ticker];
+        const firestoreTime = new Date(p.updatedAt||0).getTime();
+        const cacheTime = _quoteCacheTime[h.ticker]||0;
+        if(existing && cacheTime > firestoreTime) return; // ราคา local ใหม่กว่า ไม่ทับ
         prices[h.ticker] = {
           current: p.current, prev: p.prev||p.current,
           change: p.change||(p.current-(p.prev||p.current)),
@@ -2029,14 +2038,13 @@ function startPortfolioPriceListener() {
           high52: p.high52||p.current, low52: p.low52||p.current,
           dayHigh: p.dayHigh||p.current, dayLow: p.dayLow||p.current
         };
-        // อัปเดต quote cache ด้วย
         _quoteCache[h.ticker] = {
           close: String(p.current),
           previous_close: String(p.prev||p.current),
           high: String(p.dayHigh||p.current),
           low: String(p.dayLow||p.current)
         };
-        _quoteCacheTime[h.ticker] = Date.now();
+        _quoteCacheTime[h.ticker] = firestoreTime || Date.now();
         updated++;
       });
 
