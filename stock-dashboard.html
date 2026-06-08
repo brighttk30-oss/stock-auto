@@ -732,6 +732,7 @@ window.doLogout = async () => {
   if(typeof newsCountdown !== 'undefined') clearInterval(newsCountdown);
   if(typeof _snapTimer !== 'undefined') clearTimeout(_snapTimer);
   if(typeof _tickerUnsubscribe !== 'undefined' && _tickerUnsubscribe) _tickerUnsubscribe();
+  if(typeof _portfolioPriceUnsub !== 'undefined' && _portfolioPriceUnsub) _portfolioPriceUnsub();
   if(dbUnsubscribe) dbUnsubscribe();
   await signOut(auth);
   window.location.reload();
@@ -842,6 +843,8 @@ onAuthStateChanged(auth, async (user) => {
     syncGuestToFirestore().catch(e=>console.warn('sync guest:', e.message));
 
     if(getKey()) setupAutoSchedule();
+    startPortfolioPriceListener(); // ราคาจาก Firestore (เร็ว ไม่กิน quota)
+    startPortfolioPriceListener(); // ราคาจาก Firestore
     startTickerUpdates();
     startCentralRefresh();
   } else {
@@ -1345,18 +1348,23 @@ async function fetchAllPrices(){
   });
   if(hasAnyCache) renderHoldings();
 
-  // Step 2: fetch ราคา + FX พร้อมกัน (parallel, stagger ราคา)
-  // FX direct fetch ไม่รอ queue, ราคาหุ้น stagger 1 วินาที/ตัว
-  const pricePromises = holdings.map((h, i) =>
-    new Promise(resolve => setTimeout(async () => {
-      await fetchPriceDirect(h.ticker, h.type);
-      renderHoldings(); // update ทุกครั้งที่ได้ราคาใหม่
-      resolve();
-    }, i * 1000)) // stagger 1 วินาที/ตัว
-  );
-  // FX fetch พร้อมกับราคาแรก ไม่รอ
-  fetchFXRate().then(() => renderHoldings());
-  await Promise.all(pricePromises);
+  // Step 2: fetch เฉพาะตัวที่ยังไม่มีราคาจาก Firestore
+  // ถ้า Firestore listener ให้ราคาครบแล้ว ไม่ต้อง fetch (ประหยัด quota)
+  const needFetch = holdings.filter(h => !prices[h.ticker]?.current);
+  if(needFetch.length > 0) {
+    const pricePromises = needFetch.map((h, i) =>
+      new Promise(resolve => setTimeout(async () => {
+        await fetchPriceDirect(h.ticker, h.type);
+        renderHoldings();
+        resolve();
+      }, i * 1000))
+    );
+    fetchFXRate().then(() => renderHoldings());
+    await Promise.all(pricePromises);
+  } else {
+    // Firestore ให้ราคาครบแล้ว แค่ update FX
+    fetchFXRate().then(() => renderHoldings());
+  }
   const el = document.getElementById('lastUpdate');
   if(el) el.textContent = new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
 }
@@ -1948,6 +1956,59 @@ async function loadTickerRecs() {
 }
 
 let _tickerUnsubscribe = null;
+
+// ── PORTFOLIO PRICES จาก Firestore (เร็วเหมือน AI วิเคราะห์) ──
+let _portfolioPriceUnsub = null;
+
+function startPortfolioPriceListener() {
+  if(_portfolioPriceUnsub) _portfolioPriceUnsub();
+
+  // subscribe marketData/portfolioPrices — Actions อัปเดตทุก 20 นาที
+  _portfolioPriceUnsub = onSnapshot(
+    doc(db, 'marketData', 'portfolioPrices'),
+    (snap) => {
+      if(!snap.exists()) return;
+      const data = snap.data();
+      const cached = data.prices || {};
+      let updated = 0;
+
+      holdings.forEach(h => {
+        const p = cached[h.ticker];
+        if(!p) return;
+        prices[h.ticker] = {
+          current: p.current, prev: p.prev||p.current,
+          change: p.change||(p.current-(p.prev||p.current)),
+          changePct: p.changePct||0,
+          high52: p.high52||p.current, low52: p.low52||p.current,
+          dayHigh: p.dayHigh||p.current, dayLow: p.dayLow||p.current
+        };
+        // อัปเดต quote cache ด้วย
+        _quoteCache[h.ticker] = {
+          close: String(p.current),
+          previous_close: String(p.prev||p.current),
+          high: String(p.dayHigh||p.current),
+          low: String(p.dayLow||p.current)
+        };
+        _quoteCacheTime[h.ticker] = Date.now();
+        updated++;
+      });
+
+      if(updated > 0) {
+        renderHoldings();
+        const el = document.getElementById('lastUpdate');
+        if(el) el.textContent = data.thaiTime
+          ? data.thaiTime.slice(11,16)
+          : new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
+        console.log(`[Firestore] Portfolio prices updated: ${updated} tickers`);
+      }
+    },
+    (err) => {
+      console.warn('[Firestore] Portfolio prices error:', err.message);
+      // fallback: ดึงจาก Twelve Data แทน
+      if(holdings.length) fetchAllPrices();
+    }
+  );
+}
 
 function startTickerUpdates() {
   loadTickerRecs();
