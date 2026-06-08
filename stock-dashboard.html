@@ -747,12 +747,7 @@ onAuthStateChanged(auth, async (user) => {
     if(lastNewsTime>0&&newsCache.length){ renderNews(); startNewsCountdown(); }
     if(getKey()) setupAutoSchedule();
     startTickerUpdates();
-    setInterval(async()=>{
-      if(!holdings.length)return;
-      await fetchFXRate();
-      for(const h of holdings){ await fetchPrice(h.ticker,h.type); renderHoldings(); await sleep(300); }
-      document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
-    },5*60*1000);
+    startCentralRefresh(); // ใช้ central refresh timer ตัวเดียว
   } else {
     // GUEST MODE: แสดงหน้าหลักทันที ไม่บังคับ login
     currentUser = null;
@@ -770,12 +765,7 @@ onAuthStateChanged(auth, async (user) => {
     } else { renderHoldings(); }
     startTickerUpdates();
     renderLockedAI();
-    // auto refresh ราคาทุก 5 นาที
-    setInterval(async()=>{
-      if(!holdings.length) return;
-      await fetchFXRate();
-      for(const h of holdings){ await fetchPrice(h.ticker,h.type); renderHoldings(); await sleep(300); }
-    }, 5*60*1000);
+    startCentralRefresh(); // ใช้ central refresh timer ตัวเดียว
   }
 });
 
@@ -870,14 +860,22 @@ window.openSettings = () => {
   }
 };
 window.closeSettings = () => document.getElementById('settingsPanel').style.display='none';
-window.saveSettings = () => {
+window.saveSettings = async () => {
   saveKey(document.getElementById('orKeyInput').value.trim());
-  localStorage.setItem('morning_time',document.getElementById('morningTime').value);
-  localStorage.setItem('evening_time',document.getElementById('eveningTime').value);
+  localStorage.setItem('morning_time', document.getElementById('morningTime').value);
+  localStorage.setItem('evening_time', document.getElementById('eveningTime').value);
   const lineToken = document.getElementById('lineTokenInput').value.trim();
   saveLineToken(lineToken);
-  closeSettings(); setupAutoSchedule();
-  showToast('✅ บันทึกแล้ว' + (lineToken ? ' · Line Notify เปิดใช้งาน' : ''));
+  // บันทึก lineToken ใน Firestore เพื่อให้ GitHub Actions ส่ง Line ได้
+  if (currentUser) {
+    try {
+      await setDoc(doc(db, 'users', currentUser.uid, 'profile', 'data'),
+        { lineToken }, { merge: true });
+    } catch(e) { console.warn('save lineToken:', e.message); }
+  }
+  closeSettings();
+  if (getKey()) setupAutoSchedule();
+  showToast('✅ บันทึกแล้ว' + (lineToken ? ' · Line Notify เปิดแล้ว 🔔' : ''));
 };
 
 let _selectedPlan = 'monthly';
@@ -956,42 +954,112 @@ window.removeHolding = async (ticker) => {
 };
 
 // ── TWELVE DATA PRICE ──
-const _priceCache={}, _priceCacheTime={};
-function getTwelveSymbol(ticker,type){
-  if(type==='GOLD'||ticker==='XAUUSD') return 'XAU/USD';
-  if(type==='FX'||ticker==='USDTHB') return 'USD/THB';
-  if(type==='CRYPTO') return ticker+'/USD';
+// ══════════════════════════════════════════════════
+// QUOTA MANAGER — จำกัด 6 req/นาที รวมทุก request
+// ══════════════════════════════════════════════════
+const _reqQueue = [];
+let _reqRunning = 0;
+const REQ_LIMIT = 6; // req ต่อนาที (เผื่อ margin จาก 8)
+const REQ_INTERVAL = 60000 / REQ_LIMIT; // 10 วินาที/req
+
+function rateLimitedFetch(url) {
+  return new Promise((resolve, reject) => {
+    _reqQueue.push({ url, resolve, reject });
+    processQueue();
+  });
+}
+
+async function processQueue() {
+  if (_reqRunning >= REQ_LIMIT || !_reqQueue.length) return;
+  const { url, resolve, reject } = _reqQueue.shift();
+  _reqRunning++;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    resolve(res);
+  } catch(e) {
+    reject(e);
+  } finally {
+    setTimeout(() => {
+      _reqRunning--;
+      processQueue();
+    }, REQ_INTERVAL);
+  }
+}
+
+// Cache แยก: quote (5 นาที) และ 52W (1 วัน)
+const _quoteCache = {}, _quoteCacheTime = {};
+const _52wCache = {}, _52wCacheTime = {};
+const QUOTE_TTL = 5 * 60 * 1000;     // 5 นาที
+const W52_TTL  = 24 * 60 * 60 * 1000; // 1 วัน
+
+function getTwelveSymbol(ticker, type) {
+  if (type === 'GOLD' || ticker === 'XAUUSD') return 'XAU/USD';
+  if (type === 'FX'   || ticker === 'USDTHB') return 'USD/THB';
+  if (type === 'CRYPTO') return ticker + '/USD';
   return ticker;
 }
-async function fetchTwelveData(ticker,type){
-  const now=Date.now();
-  if(_priceCache[ticker]&&now-(_priceCacheTime[ticker]||0)<300000) return _priceCache[ticker];
-  const symbol=getTwelveSymbol(ticker,type);
-  try{
-    // Get quote + time_series for 52w high/low
-    const [qRes,tsRes]=await Promise.all([
-      fetch(`https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&apikey=${TD_KEY}`,{signal:AbortSignal.timeout(15000)}),
-      fetch(`https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1week&outputsize=52&apikey=${TD_KEY}`,{signal:AbortSignal.timeout(15000)})
-    ]);
-    const q=await qRes.json();
-    const ts=await tsRes.json();
-    if(!q.close) throw new Error(q.message||'no data');
-    const cur=parseFloat(q.close);
-    const prev=parseFloat(q.previous_close)||cur;
-    const dayHigh=parseFloat(q.high)||cur;
-    const dayLow=parseFloat(q.low)||cur;
-    // Calculate 52w high/low from time_series
-    let high52=cur, low52=cur;
-    if(ts.values&&ts.values.length>0){
-      const highs=ts.values.map(v=>parseFloat(v.high)).filter(v=>!isNaN(v));
-      const lows=ts.values.map(v=>parseFloat(v.low)).filter(v=>!isNaN(v));
-      if(highs.length>0) high52=Math.max(...highs);
-      if(lows.length>0) low52=Math.min(...lows);
+
+async function fetchTwelveData(ticker, type) {
+  const now = Date.now();
+  const symbol = getTwelveSymbol(ticker, type);
+
+  // ── Quote (ราคาปัจจุบัน) ── cache 5 นาที
+  let q = null;
+  if (_quoteCache[ticker] && now - (_quoteCacheTime[ticker] || 0) < QUOTE_TTL) {
+    q = _quoteCache[ticker];
+  } else {
+    try {
+      const res = await rateLimitedFetch(
+        `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(symbol)}&apikey=${TD_KEY}`
+      );
+      q = await res.json();
+      if (q.close) { _quoteCache[ticker] = q; _quoteCacheTime[ticker] = now; }
+      else throw new Error(q.message || 'no close');
+    } catch(e) {
+      console.warn('Quote', ticker, e.message);
+      if (_quoteCache[ticker]) q = _quoteCache[ticker]; // ใช้ cache เก่าถ้ามี
+      else return null;
     }
-    const result={meta:{regularMarketPrice:cur,chartPreviousClose:prev,fiftyTwoWeekHigh:high52,fiftyTwoWeekLow:low52,regularMarketDayHigh:dayHigh,regularMarketDayLow:dayLow}};
-    _priceCache[ticker]=result; _priceCacheTime[ticker]=now;
-    return result;
-  }catch(e){ console.warn('TwelveData '+ticker+':',e.message); return null; }
+  }
+
+  // ── 52W High/Low ── cache 1 วัน (ไม่เปลี่ยนบ่อย ประหยัด quota มาก)
+  let high52 = parseFloat(q.fifty_two_week?.high || q.close);
+  let low52  = parseFloat(q.fifty_two_week?.low  || q.close);
+  if (!_52wCache[ticker] || now - (_52wCacheTime[ticker] || 0) > W52_TTL) {
+    try {
+      const res2 = await rateLimitedFetch(
+        `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(symbol)}&interval=1week&outputsize=52&apikey=${TD_KEY}`
+      );
+      const ts = await res2.json();
+      if (ts.values && ts.values.length > 0) {
+        const highs = ts.values.map(v => parseFloat(v.high)).filter(v => !isNaN(v));
+        const lows  = ts.values.map(v => parseFloat(v.low)).filter(v => !isNaN(v));
+        if (highs.length) high52 = Math.max(...highs);
+        if (lows.length)  low52  = Math.min(...lows);
+      }
+      _52wCache[ticker] = { high52, low52 };
+      _52wCacheTime[ticker] = now;
+    } catch(e) {
+      console.warn('52W', ticker, e.message);
+      if (_52wCache[ticker]) { high52 = _52wCache[ticker].high52; low52 = _52wCache[ticker].low52; }
+    }
+  } else {
+    high52 = _52wCache[ticker].high52;
+    low52  = _52wCache[ticker].low52;
+  }
+
+  const cur  = parseFloat(q.close);
+  const prev = parseFloat(q.previous_close) || cur;
+  return {
+    meta: {
+      regularMarketPrice: cur,
+      chartPreviousClose: prev,
+      fiftyTwoWeekHigh:   high52,
+      fiftyTwoWeekLow:    low52,
+      regularMarketDayHigh: parseFloat(q.high) || cur,
+      regularMarketDayLow:  parseFloat(q.low)  || cur
+    }
+  };
 }
 async function fetchPrice(ticker,type){
   const result=await fetchTwelveData(ticker,type);
@@ -1000,19 +1068,58 @@ async function fetchPrice(ticker,type){
     prices[ticker]={current:cur,prev,change:cur-prev,changePct:prev>0?((cur-prev)/prev*100):0,high52:m.fiftyTwoWeekHigh||cur,low52:m.fiftyTwoWeekLow||cur,dayHigh:m.regularMarketDayHigh||cur,dayLow:m.regularMarketDayLow||cur};
   }else{ prices[ticker]=null; }
 }
+let _fxCacheTime = 0;
 async function fetchFXRate(){
-  try{
-    const r=await fetch(`https://api.twelvedata.com/quote?symbol=USD%2FTHB&apikey=${TD_KEY}`,{signal:AbortSignal.timeout(15000)});
-    const d=await r.json();
-    if(d.close){ fxRate=parseFloat(d.close); document.getElementById('fxRate').textContent=fxRate.toFixed(2); }
-    else throw new Error('no rate');
-  }catch(e){ fxRate=32.8; document.getElementById('fxRate').textContent=fxRate.toFixed(2)+'*'; }
+  const now = Date.now();
+  // cache 5 นาที ไม่ดึงซ้ำถี่เกินไป
+  if (fxRate > 0 && now - _fxCacheTime < 5 * 60 * 1000) return;
+  try {
+    const r = await rateLimitedFetch(
+      `https://api.twelvedata.com/quote?symbol=USD%2FTHB&apikey=${TD_KEY}`
+    );
+    const d = await r.json();
+    if (d.close) {
+      fxRate = parseFloat(d.close);
+      _fxCacheTime = now;
+      document.getElementById('fxRate').textContent = fxRate.toFixed(2);
+    } else throw new Error('no rate');
+  } catch(e) {
+    if (fxRate <= 0) fxRate = 32.8;
+    document.getElementById('fxRate').textContent = fxRate.toFixed(2) + (fxRate === 32.8 ? '*' : '');
+  }
 }
-window.refreshPrices=async()=>{
+// Central Refresh Timer — ตัวเดียวสำหรับทุก mode
+let _centralRefreshTimer = null;
+function startCentralRefresh() {
+  if (_centralRefreshTimer) clearInterval(_centralRefreshTimer);
+  // refresh ทุก 10 นาที (ประหยัด quota กว่า 5 นาที)
+  // portfolio 3 หุ้น × 1 req/ตัว = 3 req per refresh
+  // + FX = 1 req (cache 5 นาที ยิงได้ทุก 2 รอบ)
+  // = ~4 req ทุก 10 นาที + ticker 2 req ทุก 15s = ปลอดภัย
+  _centralRefreshTimer = setInterval(async () => {
+    if (!holdings.length) return;
+    await fetchFXRate();
+    for (const h of holdings) {
+      await fetchPrice(h.ticker, h.type);
+      renderHoldings();
+    }
+    const el = document.getElementById('lastUpdate');
+    if (el) el.textContent = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+  }, 10 * 60 * 1000); // 10 นาที
+}
+
+window.refreshPrices = async () => {
   showToast('🔄 อัปเดตราคา...');
+  // force clear quote cache เพื่อดึงราคาใหม่จริงๆ
+  holdings.forEach(h => { delete _quoteCache[h.ticker]; delete _quoteCacheTime[h.ticker]; });
+  _fxCacheTime = 0;
   await fetchFXRate();
-  for(const h of holdings){ await fetchPrice(h.ticker,h.type); renderHoldings(); await sleep(300); }
-  document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
+  for (const h of holdings) {
+    await fetchPrice(h.ticker, h.type);
+    renderHoldings();
+  }
+  const el = document.getElementById('lastUpdate');
+  if (el) el.textContent = new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
   showToast('✅ อัปเดตแล้ว');
 };
 
@@ -1250,44 +1357,63 @@ let tickerPrices = {};
 let tickerTimer = null;
 let tickerApiFailCount = 0;
 
-// ดึงราคาทีละ 1 symbol (Twelve Data free: 8 req/min)
+// Ticker ใช้ rateLimitedFetch ร่วมกับ portfolio (quota pool เดียวกัน)
+const _tickerCache = {}, _tickerCacheTime = {};
+const TICKER_TTL = 15 * 60 * 1000; // cache 15 นาที (อัปเดตทุก 15 นาที)
+
 async function fetchTickerSingle(sym) {
+  // ถ้ามีราคาใน prices (จากพอร์ต) ใช้เลย ไม่ดึงซ้ำ
+  if (prices[sym] && prices[sym].current) {
+    tickerPrices[sym] = {
+      price: prices[sym].current,
+      change: prices[sym].change || 0,
+      changePct: prices[sym].changePct || 0
+    };
+    return;
+  }
+  // เช็ค ticker cache
+  const now = Date.now();
+  if (_tickerCache[sym] && now - (_tickerCacheTime[sym] || 0) < TICKER_TTL) {
+    tickerPrices[sym] = _tickerCache[sym];
+    return;
+  }
   try {
-    const res = await fetch(
-      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(sym)}&apikey=${TD_KEY}`,
-      { signal: AbortSignal.timeout(10000) }
+    // ใช้ rateLimitedFetch — รวม quota pool กับ portfolio
+    const res = await rateLimitedFetch(
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(sym)}&apikey=${TD_KEY}`
     );
     const q = await res.json();
-    // debug: log ทุก response
-    if (q.status === 'error' || q.code) {
-      console.warn(`Ticker ${sym}: ${q.message || q.code}`);
-      return;
-    }
-    if (!q.close) {
-      console.warn(`Ticker ${sym}: no close price`, Object.keys(q));
+    if (q.status === 'error' || q.code || !q.close) {
+      console.warn(`Ticker ${sym}: ${q.message || q.code || 'no data'}`);
       return;
     }
     const cur = parseFloat(q.close);
     const prev = parseFloat(q.previous_close) || cur;
-    tickerPrices[sym] = {
-      price: cur,
-      change: cur - prev,
-      changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0
-    };
-    console.log(`Ticker ✅ ${sym}: $${cur.toFixed(2)}`);
+    const data = { price: cur, change: cur - prev, changePct: prev > 0 ? ((cur - prev) / prev * 100) : 0 };
+    tickerPrices[sym] = data;
+    _tickerCache[sym] = data;
+    _tickerCacheTime[sym] = now;
   } catch(e) {
-    console.warn(`Ticker ${sym} error:`, e.message);
+    console.warn(`Ticker ${sym}:`, e.message);
   }
 }
 
-// ดึง 2 ตัวพร้อมกัน หน่วง 15 วินาที = ~8 req/min พอดี free plan limit
-// 30 ตัว / 2 = 15 waves × 15s = ~3.5 นาทีครบ แต่เห็นทยอยขึ้นตลอด
+// ดึงทีละตัวผ่าน queue (rateLimitedFetch จัดการ spacing อัตโนมัติ)
 async function fetchTickerParallel(symbols) {
-  for (let i = 0; i < symbols.length; i += 2) {
-    const pair = symbols.slice(i, i + 2);
-    await Promise.all(pair.map(s => fetchTickerSingle(s)));
-    renderTicker1(); // update แถบทันที
-    if (i + 2 < symbols.length) await sleep(15000); // 15s ระหว่าง wave
+  // กรอง symbols ที่มีราคาจากพอร์ตแล้ว เพื่อประหยัด request
+  const portSyms = new Set(holdings.map(h => h.ticker));
+  const needFetch = symbols.filter(s => !portSyms.has(s));
+  const fromPort  = symbols.filter(s => portSyms.has(s));
+  // copy จาก prices ทันที
+  fromPort.forEach(s => {
+    if (prices[s]) tickerPrices[s] = { price: prices[s].current, change: prices[s].change||0, changePct: prices[s].changePct||0 };
+  });
+  renderTicker1();
+  // fetch watchlist ที่ไม่อยู่ในพอร์ต — ผ่าน queue อัตโนมัติ
+  for (const sym of needFetch) {
+    await fetchTickerSingle(sym);
+    renderTicker1();
+    // ไม่ต้อง sleep เพราะ rateLimitedFetch จัดการ spacing แล้ว
   }
 }
 
@@ -1895,14 +2021,21 @@ function renderPortfolioHistory(){
     </div>`;
 }
 
-// hook renderHoldings เพิ่ม save snapshot ทุกครั้งที่ราคาอัปเดต
-const _rh = window.renderHoldings;
+// hook renderHoldings — รวม pie + alerts + snapshot ในที่เดียว
+// ไม่ซ้อน hook หลายชั้น ป้องกัน recursion
 let _snapTimer = null;
+const _baseRenderHoldings = renderHoldings; // เก็บ base function
 window.renderHoldings = function(){
-  _rh();
-  // save snapshot debounce 3 วินาที
+  _baseRenderHoldings();
+  renderPieChart();
+  checkPriceAlerts();
+  updateAlertTickerSelect();
+  // debounce snapshot 3 วินาที ไม่รบกวน render ถี่ๆ
   clearTimeout(_snapTimer);
-  _snapTimer = setTimeout(()=>{ savePortfolioSnapshot(); renderPortfolioHistory(); }, 3000);
+  _snapTimer = setTimeout(() => {
+    savePortfolioSnapshot();
+    renderPortfolioHistory();
+  }, 3000);
 };
 
 // ══════════════════════════════════════════════════
