@@ -3,6 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- PWA -->
+<link rel="manifest" href="/stock-auto/manifest.json">
+<meta name="theme-color" content="#00d4aa">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="StockAI">
+<link rel="apple-touch-icon" href="/stock-auto/icon-192.png">
+<meta name="description" content="ติดตามพอร์ตหุ้นอัจฉริยะ วิเคราะห์ด้วย AI">
 <title>StockAI — Portfolio Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Noto+Sans+Thai:wght@300;400;600;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
 <style>
@@ -487,7 +495,16 @@ tr:hover td{background:rgba(0,212,170,0.03);}
     <h3>+ เพิ่มหลักทรัพย์</h3>
     <div class="form-grid">
       <div class="fg full"><label>สัญลักษณ์ (TICKER)</label><input type="text" id="inputTicker" placeholder="เช่น WDC, NVDA, XAUUSD" oninput="this.value=this.value.toUpperCase()"></div>
-      <div class="fg"><label>ประเภท</label><select id="inputType"><option value="US">หุ้น US</option><option value="GOLD">ทองคำ</option><option value="FX">FX</option><option value="CRYPTO">Crypto</option></select></div>
+      <div class="fg"><label>ประเภท</label><select id="inputType" onchange="updateTickerHint()">
+  <option value="US">🇺🇸 หุ้น US</option>
+  <option value="TH">🇹🇭 หุ้นไทย (SET)</option>
+  <option value="ETF">📊 ETF</option>
+  <option value="MF">🏦 กองทุนรวม</option>
+  <option value="GOLD">🥇 ทองคำ</option>
+  <option value="CRYPTO">₿ Crypto</option>
+  <option value="FX">💱 FX</option>
+</select>
+<div id="tickerHint" style="font-size:0.65rem;color:var(--text3);margin-top:4px;">เช่น AAPL, NVDA, TSLA</div></div>
       <div class="fg"><label>จำนวน</label><input type="number" id="inputQty" placeholder="0.00" step="any" min="0"></div>
       <div class="fg"><label>ราคาซื้อ (USD)</label><input type="number" id="inputBuyPrice" placeholder="0.00" step="any" min="0"></div>
       <div class="fg full"><label>ชื่อเต็ม (ไม่บังคับ)</label><input type="text" id="inputName" placeholder="เช่น Western Digital Corp"></div>
@@ -708,6 +725,12 @@ window.doGoogleLogin = async () => {
 };
 
 window.doLogout = async () => {
+  // cleanup timers ก่อน logout ป้องกัน memory leak
+  if(typeof _centralRefreshTimer !== 'undefined') clearInterval(_centralRefreshTimer);
+  if(typeof tickerTimer !== 'undefined') clearInterval(tickerTimer);
+  if(typeof autoTimer !== 'undefined') clearInterval(autoTimer);
+  if(typeof newsCountdown !== 'undefined') clearInterval(newsCountdown);
+  if(typeof _snapTimer !== 'undefined') clearTimeout(_snapTimer);
   if(dbUnsubscribe) dbUnsubscribe();
   await signOut(auth);
   window.location.reload();
@@ -1057,8 +1080,27 @@ function getTwelveSymbol(ticker, type) {
   if (type === 'GOLD' || ticker === 'XAUUSD') return 'XAU/USD';
   if (type === 'FX'   || ticker === 'USDTHB') return 'USD/THB';
   if (type === 'CRYPTO') return ticker + '/USD';
+  if (type === 'TH') return ticker.includes(':') ? ticker : ticker + ':SET';
+  if (type === 'ETF') return ticker; // ETF US ใช้ตรงๆ
+  if (type === 'MF') return null; // กองทุนรวมใช้ SEC API แยก
   return ticker;
 }
+
+// hint ใต้ช่อง ticker
+window.updateTickerHint = () => {
+  const type = document.getElementById('inputType')?.value;
+  const hints = {
+    US: 'เช่น AAPL, NVDA, TSLA, WDC',
+    TH: 'เช่น PTT, CPALL, KBANK, AOT (ใส่แค่ชื่อย่อ)',
+    ETF: 'เช่น QQQ, SPY, VTI, GLD',
+    MF: 'เช่น KFLTFDIV, SCBDV, TMBUSASMIDCAP (รหัสกองทุน)',
+    GOLD: 'ใส่ XAUUSD หรือ GOLD',
+    CRYPTO: 'เช่น BTC, ETH, SOL (ไม่ต้องมี /USD)',
+    FX: 'เช่น USDTHB, EURUSD'
+  };
+  const el = document.getElementById('tickerHint');
+  if(el) el.textContent = hints[type] || '';
+};
 
 async function fetchTwelveData(ticker, type) {
   const now = Date.now();
@@ -1124,7 +1166,50 @@ async function fetchTwelveData(ticker, type) {
   };
 }
 // Direct fetch ไม่ผ่าน queue — ใช้ตอนเพิ่มหุ้นใหม่ ต้องการผล fast
+// ── SEC API: กองทุนรวมไทย ──
+const _mfCache = {}, _mfCacheTime = {};
+const MF_TTL = 4 * 60 * 60 * 1000; // cache 4 ชั่วโมง (NAV อัปเดตวันละครั้ง)
+
+async function fetchSECFund(ticker) {
+  const now = Date.now();
+  if(_mfCache[ticker] && now - (_mfCacheTime[ticker]||0) < MF_TTL) {
+    prices[ticker] = _mfCache[ticker];
+    return;
+  }
+  try {
+    // SEC Open API — ฟรี ไม่ต้อง key
+    const res = await fetch(
+      `https://api.sec.or.th/FundInfo/fund/${encodeURIComponent(ticker)}`,
+      { signal: AbortSignal.timeout(15000) }
+    );
+    if(!res.ok) throw new Error(`SEC API ${res.status}`);
+    const data = await res.json();
+    // SEC API คืน array หรือ object ขึ้นกับ endpoint
+    const fund = Array.isArray(data) ? data[0] : data;
+    if(!fund) throw new Error('no fund data');
+    const nav = parseFloat(fund.last_val || fund.nav || fund.net_asset_value || 0);
+    if(!nav || nav <= 0) throw new Error('invalid NAV');
+    const prevNav = parseFloat(fund.prev_val || nav);
+    const result = {
+      current: nav, prev: prevNav,
+      change: nav - prevNav,
+      changePct: prevNav > 0 ? ((nav-prevNav)/prevNav*100) : 0,
+      high52: nav, low52: nav, // SEC ไม่มี 52W
+      dayHigh: nav, dayLow: nav,
+      fundName: fund.proj_name_th || fund.fund_name || ticker,
+      isMF: true
+    };
+    prices[ticker] = result;
+    _mfCache[ticker] = result;
+    _mfCacheTime[ticker] = now;
+  } catch(e) {
+    console.warn('fetchSECFund', ticker, e.message);
+    if(!prices[ticker]) prices[ticker] = null;
+  }
+}
+
 async function fetchPriceDirect(ticker, type){
+  if(type === 'MF') { await fetchSECFund(ticker); return; }
   const symbol = getTwelveSymbol(ticker, type);
   try {
     const res = await fetch(
@@ -1159,6 +1244,8 @@ async function fetchPriceDirect(ticker, type){
 }
 
 async function fetchPrice(ticker, type){
+  // กองทุนรวม — ใช้ SEC API แทน Twelve Data
+  if(type === 'MF') { await fetchSECFund(ticker); return; }
   const result = await fetchTwelveData(ticker, type);
   if(result){
     const m = result.meta;
@@ -1265,16 +1352,26 @@ function renderHoldings(){
   let tv=0,tc=0,totalAthDiff=0;
   tbody.innerHTML=holdings.map(h=>{
     const p=prices[h.ticker];
-    const cost=h.qty*h.buyPrice; const curr=p?h.qty*p.current:0; const pl=p?curr-cost:0; const plPct=cost>0?(pl/cost*100):0;
-    if(p){tv+=curr;tc+=cost;}
+    const cost=h.qty*h.buyPrice; const isTHB=h.type==='TH'||h.type==='MF';
+    const curr=p?h.qty*p.current:0; const pl=p?curr-cost:0; const plPct=cost>0?(pl/cost*100):0;
+    // TH/MF ราคาเป็นบาทแล้ว หาร fxRate เพื่อ normalize เป็น USD ก่อนรวม
+    if(p){tv+=isTHB?(fxRate>0?curr/fxRate:0):curr; tc+=isTHB?(fxRate>0?cost/fxRate:0):cost;}
     const ath52=p?.high52||0;
     const athDiffUSD=p&&ath52>p.current?(ath52-p.current)*h.qty:0;
     const athDiffTHB=athDiffUSD*fxRate;
     const athPct=p&&ath52>0?((ath52-p.current)/ath52*100):0;
     if(athDiffUSD>0) totalAthDiff+=athDiffTHB;
-    const tC=h.type==='GOLD'?'type-gold':h.type==='FX'?'type-fx':h.type==='CRYPTO'?'type-crypto':'type-us';
-    const tL=h.type==='GOLD'?'GOLD':h.type==='FX'?'FX':h.type==='CRYPTO'?'CRYPTO':'US';
-    const dC=h.type==='GOLD'?'var(--gold)':h.type==='FX'?'var(--accent)':h.type==='CRYPTO'?'var(--purple)':'var(--blue)';
+    const typeMap = {
+      US:{cls:'type-us',lbl:'US',col:'var(--blue)'},
+      TH:{cls:'type-th',lbl:'TH',col:'#ff9f43'},
+      ETF:{cls:'type-etf',lbl:'ETF',col:'#26c6da'},
+      MF:{cls:'type-mf',lbl:'กองทุน',col:'#66bb6a'},
+      GOLD:{cls:'type-gold',lbl:'GOLD',col:'var(--gold)'},
+      CRYPTO:{cls:'type-crypto',lbl:'CRYPTO',col:'var(--purple)'},
+      FX:{cls:'type-fx',lbl:'FX',col:'var(--accent)'}
+    };
+    const tm=typeMap[h.type]||typeMap.US;
+    const tC=tm.cls, tL=tm.lbl, dC=tm.col;
     const sel=selectedTicker===h.ticker?'selected':'';
     return `<tr class="${sel}" onclick="selectTicker('${h.ticker}','${h.type}')">
       <td><div class="ticker-badge"><div class="ticker-dot" style="background:${dC};box-shadow:0 0 5px ${dC}"></div><div><div class="ticker-name">${h.ticker}</div>${h.name?`<div class="ticker-full">${h.name}</div>`:''}</div></div></td>
@@ -1285,7 +1382,7 @@ function renderHoldings(){
       <td>${p?`<span style="color:${p.change>=0?'var(--green)':'var(--red)'}">$${p.current.toFixed(2)}<br><span style="font-size:0.62rem">${p.change>=0?'▲':'▼'} ${Math.abs(p.changePct).toFixed(2)}%</span></span>`:`<span class='loading-price'><span class='skel' style='width:60px'></span></span>`}</td>
       <td>${p&&ath52>0?`<span style="color:#ff9f43">${athDiffTHB>0?'฿'+athDiffTHB.toLocaleString('th-TH',{maximumFractionDigits:0}):'฿0'}<br><span style="font-size:0.62rem;color:#ff9f43">▼ ${athPct.toFixed(1)}% จาก High</span></span>`:'--'}</td>
       <td>${p?'$'+curr.toFixed(2):'--'}</td>
-      <td style="color:var(--gold)">${p&&fxRate>0?'฿'+(curr*fxRate).toLocaleString('th-TH',{maximumFractionDigits:0}):'--'}</td>
+      <td style="color:var(--gold)">${p?( (h.type==='TH'||h.type==='MF') ? '฿'+curr.toLocaleString('th-TH',{maximumFractionDigits:2}) : fxRate>0?'฿'+(curr*fxRate).toLocaleString('th-TH',{maximumFractionDigits:0}):'--' ):'--'}</td>
       <td class="${pl>=0?'pos':'neg'}">${p?(pl>=0?'+':'')+pl.toFixed(2):'--'}</td>
       <td class="${plPct>=0?'pos':'neg'}">${p?(plPct>=0?'+':'')+plPct.toFixed(2)+'%':'--'}</td>
       <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="openCostAvg('${h.ticker}')" title="คำนวณ Cost Average">📐</button> <button class="btn btn-danger btn-sm" onclick="removeHolding('${h.ticker}')">ลบ</button></td>
@@ -1321,7 +1418,11 @@ window.selectTicker=async(ticker,type)=>{
   } else {
     document.getElementById('chartSR').style.display='none';
   }
-  const tvSym=type==='GOLD'?'COMEX:GC1!':type==='FX'?'FOREX:USDTHB':ticker;
+  const tvSym = type==='GOLD' ? 'COMEX:GC1!' :
+                type==='FX'   ? 'FOREX:USDTHB' :
+                type==='TH'   ? 'SET:'+ticker.replace(':SET','') :
+                type==='CRYPTO' ? 'BINANCE:'+ticker+'USDT' :
+                ticker;
   const tvDiv=document.getElementById('tvContainer'); tvDiv.innerHTML='';
   // Use TradingView iframe embed - works on all hosts
   const studies = encodeURIComponent(JSON.stringify([
@@ -1719,7 +1820,7 @@ function renderPieChart(){
   if(!data.length){ section.innerHTML='<div style="text-align:center;color:var(--text3);font-size:0.78rem;padding:20px;">รอราคาโหลดก่อน</div>'; return; }
   const total = data.reduce((s,d)=>s+d.val,0);
   const colors = ['#00d4aa','#f7c948','#58a6ff','#bc8cff','#ff9f43','#ff4d6d','#26c6da','#66bb6a','#ff7043','#ab47bc'];
-  const typeColors = { US:'#58a6ff', GOLD:'#f7c948', CRYPTO:'#bc8cff', FX:'#00d4aa' };
+  const typeColors = { US:'#58a6ff', TH:'#ff9f43', ETF:'#26c6da', MF:'#66bb6a', GOLD:'#f7c948', CRYPTO:'#bc8cff', FX:'#00d4aa' };
   // วาด SVG pie
   const size = 160, cx = 80, cy = 80, r = 70, ri = 40;
   let startAngle = -Math.PI/2;
@@ -2113,21 +2214,7 @@ window.saveLineNotify = () => {
   document.getElementById('lineTokenInput').value = token;
 };
 
-async function sendLineNotify(message){
-  const token = getLineToken();
-  if(!token) return;
-  try {
-    // Line Notify API ต้องเรียกผ่าน server (CORS) — ใช้ proxy สาธารณะ
-    await fetch('https://notify-api.line.me/api/notify', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'message=' + encodeURIComponent(message)
-    });
-  } catch(e) {
-    // Line Notify มี CORS บน browser ให้แจ้ง user ว่าต้องใช้ผ่าน server
-    console.warn('Line Notify CORS (ปกติ ใช้งานผ่าน GitHub Actions แทน):', e.message);
-  }
-}
+// Line Notify: ผ่าน GitHub Actions
 
 // Line Notify ผ่าน browser ไม่ได้เพราะ CORS
 // การแจ้งเตือนผ่าน Line ส่งโดย GitHub Actions แทน (analyze.js)
@@ -2294,8 +2381,17 @@ window.renderLockedAI = function(){
 // ══════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════
-checkShareUrl();   // เช็ค share URL ตอนเปิดหน้า
+checkShareUrl().catch(e=>console.warn('shareUrl:',e));   // เช็ค share URL ตอนเปิดหน้า
 loadSocialProof(); // โหลด social proof
+
+// ── PWA Service Worker ──
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/stock-auto/sw.js')
+      .then(reg => console.log('SW registered:', reg.scope))
+      .catch(e => console.warn('SW error:', e));
+  });
+}
 
 </script>
 </body>
