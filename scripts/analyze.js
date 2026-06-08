@@ -194,6 +194,28 @@ async function analyzeUserPortfolios() {
 
       processed++;
       console.log(`  💾 Saved user ${prof.email}`);
+
+      // ── Line Notify: ส่งสรุปพอร์ตถ้ามี token ──
+      const lineToken = prof.lineToken || '';
+      if (lineToken && Object.keys(aiCache).length > 0) {
+        const bullish = Object.entries(aiCache)
+          .filter(([,v]) => v.sentiment?.includes('BULLISH'))
+          .map(([k]) => k).join(', ');
+        const bearish = Object.entries(aiCache)
+          .filter(([,v]) => v.sentiment?.includes('BEARISH'))
+          .map(([k]) => k).join(', ');
+        let msg = `
+📊 StockAI วิเคราะห์ ${thaiDate} ${thaiTime}
+`;
+        if (bullish) msg += `🟢 BULLISH: ${bullish}
+`;
+        if (bearish) msg += `🔴 BEARISH: ${bearish}
+`;
+        msg += `
+🔗 ดูรายละเอียด: https://brighttk30-oss.github.io/stock-auto/stock-dashboard.html`;
+        await sendLineNotify(lineToken, msg);
+      }
+
       await sleep(1000);
     } catch(e) {
       console.error(`❌ User ${uid}:`, e.message);
@@ -296,8 +318,57 @@ ${stockData}
 
   console.log('\n💾 Saved recommendations to Firestore: marketData/recommendations');
 
-  // ── ขั้นตอน 4: วิเคราะห์พอร์ต user ด้วย (08:00 วิเคราะห์ทั้งคู่) ──
+  // ── ขั้นตอน 4: update stats ──
+  await updateStats();
+
+  // ── ขั้นตอน 5: วิเคราะห์พอร์ต user + Line Notify ──
   await analyzeUserPortfolios();
+}
+
+// ── LINE NOTIFY ──
+async function sendLineNotify(token, message) {
+  if (!token) return;
+  try {
+    const res = await fetch('https://notify-api.line.me/api/notify', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: 'message=' + encodeURIComponent(message)
+    });
+    const ok = res.status === 200;
+    console.log(`Line Notify: ${ok ? '✅ sent' : '❌ failed ' + res.status}`);
+  } catch(e) {
+    console.warn('Line Notify error:', e.message);
+  }
+}
+
+// ── UPDATE STATS (marketData/stats) ──
+async function updateStats() {
+  try {
+    console.log('
+📊 Updating stats...');
+    const usersSnap = await db.collection('users').get();
+    let totalUsers = 0, premiumUsers = 0;
+    for (const userDoc of usersSnap.docs) {
+      try {
+        const prof = await db.doc(`users/${userDoc.id}/profile/data`).get();
+        if (!prof.exists) continue;
+        totalUsers++;
+        const d = prof.data();
+        const isPrem = (d.plan === 'premium' || d.plan === 'trial') && d.planExpiry > Date.now();
+        if (isPrem) premiumUsers++;
+      } catch(e) {}
+    }
+    await db.doc('marketData/stats').set({
+      totalUsers, premiumUsers,
+      updatedAt: new Date().toISOString()
+    });
+    console.log(`✅ Stats: ${totalUsers} users, ${premiumUsers} premium`);
+  } catch(e) {
+    console.error('updateStats error:', e.message);
+  }
 }
 
 // ── MAIN ──
