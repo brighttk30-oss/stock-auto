@@ -794,6 +794,11 @@ onAuthStateChanged(auth, async (user) => {
       getDoc(doc(db,'users',user.uid,'portfolio','main'))
     ]);
 
+    // บันทึก lastLogin (non-blocking)
+    setDoc(doc(db,'users',user.uid,'profile','data'),
+      { lastLogin: Date.now() }, { merge: true }
+    ).catch(()=>{});
+
     // Process profile
     if(profSnap.exists()) {
       userProfile = profSnap.data();

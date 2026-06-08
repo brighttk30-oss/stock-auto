@@ -104,6 +104,7 @@ tr:hover td{background:rgba(0,212,170,0.03);}
   <div style="display:flex;gap:10px;align-items:center;">
     <span style="font-size:0.72rem;color:var(--text2);font-family:'Space Mono',monospace;" id="adminEmailDisplay"></span>
     <button class="btn btn-sm" onclick="exportUsersCSV()" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border);">📥 Export</button>
+    <button class="btn btn-sm" onclick="exportUsersCSV(true)" style="background:var(--surface2);color:var(--gold);border:1px solid rgba(247,201,72,0.3);">⭐ Export Premium</button>
     <button class="btn btn-sm btn-outline" onclick="doLogout()">ออกจากระบบ</button>
   </div>
 </header>
@@ -158,7 +159,7 @@ tr:hover td{background:rgba(0,212,170,0.03);}
     </div>
     <div style="overflow-x:auto;">
       <table>
-        <thead><tr><th>ชื่อ</th><th>อีเมล</th><th>Plan</th><th>หมดอายุ</th><th>สมัครเมื่อ</th><th>Action</th></tr></thead>
+        <thead><tr><th>ชื่อ</th><th>อีเมล</th><th>Plan</th><th>หมดอายุ</th><th>สมัครเมื่อ</th><th>Login ล่าสุด</th><th>Action</th></tr></thead>
         <tbody id="usersBody"><tr><td colspan="6" class="empty">กำลังโหลด...</td></tr></tbody>
       </table>
     </div>
@@ -196,7 +197,7 @@ tr:hover td{background:rgba(0,212,170,0.03);}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, setDoc, getDoc, getDocs, collection, collectionGroup, updateDoc, query, orderBy, where, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, getDocs, collection, collectionGroup, updateDoc, deleteDoc, query, orderBy, where, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, signInWithEmailAndPassword, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const FB_CFG={apiKey:"AIzaSyAb073KKqOV5aYP_S57JTvOUOCUWvr2Ebo",authDomain:"stock-web-c2068.firebaseapp.com",projectId:"stock-web-c2068",storageBucket:"stock-web-c2068.firebasestorage.app",messagingSenderId:"4202725865",appId:"1:4202725865:web:180682bc845693d92c0b78"};
@@ -230,15 +231,17 @@ function getExpiry(u){
 }
 
 function formatDate(val){
-  if(!val) return '--';
-  if(typeof val === 'number') return new Date(val).toLocaleDateString('th-TH');
-  if(val?.toDate) return val.toDate().toLocaleDateString('th-TH');
-  if(val?.seconds) return new Date(val.seconds*1000).toLocaleDateString('th-TH');
-  if(typeof val === 'string') {
-    const d = new Date(val);
-    return isNaN(d) ? val : d.toLocaleDateString('th-TH');
-  }
-  return '--';
+  if(!val || val === 0) return '--';
+  let d;
+  if(typeof val === 'number') d = new Date(val);
+  else if(val?.toDate) d = val.toDate();
+  else if(val?.seconds) d = new Date(val.seconds*1000);
+  else if(typeof val === 'string') d = new Date(val);
+  else return '--';
+  if(isNaN(d.getTime())) return '--';
+  // ถ้า timestamp เก่าเกินไป (ก่อนปี 2020) แสดง '--'
+  if(d.getFullYear() < 2020) return '--';
+  return d.toLocaleDateString('th-TH',{year:'numeric',month:'short',day:'numeric'});
 }
 
 function formatDateTime(val){
@@ -388,14 +391,19 @@ function updateStats(){
     .filter(p=>{ const d=getPayDate(p); return d && d>=yearStart; })
     .reduce((s,p)=>s+(parseFloat(p.amount)||0),0);
 
-  document.getElementById('statRevenue').textContent = '฿'+monthRevenue.toLocaleString();
+  document.getElementById('statRevenue').textContent = monthRevenue > 0 ? '฿'+monthRevenue.toLocaleString() : 'ยังไม่มี';
   document.getElementById('statRevenueYear').textContent = `รวมปีนี้ ฿${yearRevenue.toLocaleString()}`;
   document.getElementById('statTotalPayments').textContent = allPayments.length;
 
   // new users this month
   const newUsers = allUsers.filter(u=>{
-    const d = getExpiry({planExpiry: u.createdAt});
-    return d && new Date(u.createdAt) >= monthStart;
+    if(!u.createdAt) return false;
+    let d;
+    if(typeof u.createdAt === 'number') d = new Date(u.createdAt);
+    else if(u.createdAt?.toDate) d = u.createdAt.toDate();
+    else if(u.createdAt?.seconds) d = new Date(u.createdAt.seconds*1000);
+    else d = new Date(u.createdAt);
+    return !isNaN(d) && d >= monthStart && d.getFullYear() >= 2020;
   }).length;
   document.getElementById('statNewThisMonth').textContent = `+${newUsers} เดือนนี้`;
 }
@@ -528,7 +536,7 @@ function renderUsers(){
   const page = filtered.slice(start, start+USERS_PER_PAGE);
 
   const tbody = document.getElementById('usersBody');
-  if(!page.length){ tbody.innerHTML=`<tr><td colspan="6" class="empty">ไม่พบ User</td></tr>`; return; }
+  if(!page.length){ tbody.innerHTML=`<tr><td colspan="7" class="empty">ไม่พบ User</td></tr>`; return; }
 
   tbody.innerHTML = page.map(u=>{
     const exp = getExpiry(u);
@@ -541,17 +549,22 @@ function renderUsers(){
       : isTrial
         ? '<span class="badge badge-trial">🎁 TRIAL</span>'
         : '<span class="badge badge-free">FREE</span>';
+    const lastLoginStr = u.lastLogin ? formatDateTime(u.lastLogin) : '--';
+    const safeNameEmail = (u.name||u.email||'').replace(/'/g,"&#39;").replace(/"/g,"&quot;");
     return `<tr>
       <td>${u.name||'--'}</td>
-      <td style="font-family:'Space Mono',monospace;font-size:0.68rem;">${u.email||'--'}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.65rem;">${u.email||'--'}</td>
       <td>${badge}</td>
-      <td style="font-family:'Space Mono',monospace;font-size:0.68rem;color:${isPrem||isTrial?'var(--gold)':'var(--text3)'};">${expiryStr}</td>
-      <td style="font-family:'Space Mono',monospace;font-size:0.68rem;">${formatDate(u.createdAt)}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.65rem;color:${isPrem||isTrial?'var(--gold)':'var(--text3)'};">${expiryStr}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.65rem;">${formatDate(u.createdAt)}</td>
+      <td style="font-family:'Space Mono',monospace;font-size:0.65rem;color:var(--text2);">${lastLoginStr}</td>
       <td><div class="action-btns">
-        <button class="btn btn-gold btn-sm" onclick="openSetPremium('${u.uid}','${(u.name||u.email).replace(/'/g,'')}','premium')">⭐</button>
-        <button class="btn btn-sm" onclick="openSetPremium('${u.uid}','${(u.name||u.email).replace(/'/g,'')}','trial')" style="background:transparent;color:#00d4aa;border:1px solid #00d4aa;">🎁</button>
-        ${(isPrem||isTrial)?`<button class="btn btn-sm" onclick="extendPremium('${u.uid}')" style="background:var(--blue);color:#000;">+30ว</button>`:''}
+        <button class="btn btn-gold btn-sm" title="ตั้ง Premium" onclick="openSetPremium('${u.uid}','${safeNameEmail}','premium')">⭐</button>
+        <button class="btn btn-sm" title="ให้ Trial" onclick="openSetPremium('${u.uid}','${safeNameEmail}','trial')" style="background:transparent;color:#00d4aa;border:1px solid #00d4aa;">🎁</button>
+        ${(isPrem||isTrial)?`<button class="btn btn-sm" title="ต่ออายุ +30 วัน" onclick="extendPremium('${u.uid}')" style="background:var(--blue);color:#000;">+30ว</button>`:''}
         ${(isPrem||isTrial)?`<button class="btn btn-danger btn-sm" onclick="revokePremium('${u.uid}')">ยกเลิก</button>`:''}
+        <button class="btn btn-sm" title="ดู Portfolio" onclick="viewUserPortfolio('${u.uid}','${safeNameEmail}')" style="background:transparent;color:var(--text2);border:1px solid var(--border);">📊</button>
+        <button class="btn btn-danger btn-sm" title="ลบ User" onclick="confirmDeleteUser('${u.uid}','${safeNameEmail}')" style="background:transparent;color:var(--red);border:1px solid var(--red);">🗑</button>
       </div></td>
     </tr>`;
   }).join('');
@@ -614,6 +627,92 @@ window.extendPremium = async (uid) => {
   }catch(e){ showToast('Error: '+e.message,true); }
 };
 
+// ── VIEW USER PORTFOLIO ──
+window.viewUserPortfolio = async (uid, name) => {
+  try {
+    const snap = await getDoc(doc(db,'users',uid,'portfolio','main'));
+    if(!snap.exists()){ showToast('ไม่มีข้อมูล portfolio',true); return; }
+    const data = snap.data();
+    const holdings = data.holdings||[];
+    const modal = document.getElementById('setPremiumModal');
+    document.getElementById('setPremiumContent').innerHTML = `
+      <p style="font-size:0.82rem;color:var(--text2);margin-bottom:14px;">Portfolio ของ <strong style="color:var(--text)">${name}</strong></p>
+      ${holdings.length === 0
+        ? '<p style="color:var(--text3);font-size:0.8rem;">ไม่มีหุ้นในพอร์ต</p>'
+        : `<table style="width:100%;border-collapse:collapse;">
+            <thead><tr>
+              <th style="text-align:left;padding:6px;font-size:0.65rem;color:var(--text3);border-bottom:1px solid var(--border);">Ticker</th>
+              <th style="text-align:right;padding:6px;font-size:0.65rem;color:var(--text3);border-bottom:1px solid var(--border);">จำนวน</th>
+              <th style="text-align:right;padding:6px;font-size:0.65rem;color:var(--text3);border-bottom:1px solid var(--border);">ราคาซื้อ</th>
+              <th style="text-align:left;padding:6px;font-size:0.65rem;color:var(--text3);border-bottom:1px solid var(--border);">ประเภท</th>
+            </tr></thead>
+            <tbody>
+              ${holdings.map(h=>`<tr>
+                <td style="padding:6px;font-family:'Space Mono',monospace;font-size:0.75rem;color:var(--accent);">${h.ticker}</td>
+                <td style="padding:6px;text-align:right;font-size:0.75rem;">${h.qty}</td>
+                <td style="padding:6px;text-align:right;font-size:0.75rem;">$${parseFloat(h.buyPrice||0).toFixed(2)}</td>
+                <td style="padding:6px;font-size:0.72rem;color:var(--text2);">${h.type||'US'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>`
+      }
+      <p style="font-size:0.7rem;color:var(--text3);margin-top:10px;">อัปเดตล่าสุด: ${data.autoUpdatedAt ? new Date(data.autoUpdatedAt).toLocaleString('th-TH') : '--'}</p>`;
+    document.getElementById('confirmPremiumBtn').style.display = 'none';
+    document.getElementById('setPremiumModal').classList.add('show');
+  } catch(e) { showToast('Error: '+e.message,true); }
+};
+
+// เมื่อปิด modal ให้ reset confirm button
+document.getElementById('setPremiumModal').addEventListener('click', (e)=>{
+  if(e.target.id==='setPremiumModal'){
+    closePremiumModal();
+    document.getElementById('confirmPremiumBtn').style.display = '';
+  }
+});
+
+window.closePremiumModal = () => {
+  document.getElementById('setPremiumModal').classList.remove('show');
+  document.getElementById('confirmPremiumBtn').style.display = '';
+};
+
+// ── DELETE USER ──
+window.confirmDeleteUser = (uid, name) => {
+  const modal = document.getElementById('setPremiumModal');
+  document.getElementById('setPremiumContent').innerHTML = `
+    <div style="text-align:center;padding:10px;">
+      <div style="font-size:2rem;margin-bottom:10px;">⚠️</div>
+      <p style="font-size:0.9rem;margin-bottom:8px;">ยืนยันลบ User?</p>
+      <p style="font-size:0.8rem;color:var(--red);margin-bottom:16px;"><strong>${name}</strong></p>
+      <p style="font-size:0.72rem;color:var(--text2);">ข้อมูล Firestore จะถูกลบ<br>(Firebase Auth ต้องลบผ่าน Console แยก)</p>
+    </div>`;
+  document.getElementById('confirmPremiumBtn').textContent = '🗑 ลบ User';
+  document.getElementById('confirmPremiumBtn').style.background = 'var(--red)';
+  document.getElementById('confirmPremiumBtn').style.display = '';
+  document.getElementById('confirmPremiumBtn').onclick = () => deleteUserData(uid);
+  document.getElementById('setPremiumModal').classList.add('show');
+};
+
+window.deleteUserData = async (uid) => {
+  try {
+    // ลบ Firestore data ทั้งหมด
+    const batch = [
+      deleteDoc(doc(db,'users',uid,'profile','data')),
+      deleteDoc(doc(db,'users',uid,'portfolio','main')),
+    ];
+    await Promise.allSettled(batch);
+    // ลบ user doc หลัก
+    await deleteDoc(doc(db,'users',uid)).catch(()=>{});
+    // ลบออกจาก allUsers array
+    allUsers = allUsers.filter(u=>u.uid!==uid);
+    renderUsers();
+    updateStats();
+    closePremiumModal();
+    document.getElementById('confirmPremiumBtn').textContent = '✅ ยืนยัน';
+    document.getElementById('confirmPremiumBtn').style.background = '';
+    showToast('✅ ลบข้อมูล User เรียบร้อย (Firebase Auth ต้องลบใน Console)');
+  } catch(e) { showToast('Error: '+e.message,true); }
+};
+
 window.revokePremium = async (uid) => {
   if(!confirm('ยกเลิก Premium?')) return;
   try{
@@ -624,11 +723,13 @@ window.revokePremium = async (uid) => {
 };
 
 // ── EXPORT CSV ──
-window.exportUsersCSV = () => {
+window.exportUsersCSV = (premiumOnly=false) => {
   if(!allUsers.length){ showToast('ยังไม่มีข้อมูล',true); return; }
   const now = Date.now();
-  const rows = [['ชื่อ','อีเมล','Plan','วันหมดอายุ','สมัครเมื่อ','UID']];
-  allUsers.forEach(u=>{
+  let list = allUsers;
+  if(premiumOnly) list = allUsers.filter(u=>(u.plan==='premium'||u.plan==='trial') && getExpiry(u)>now);
+  const rows = [['ชื่อ','อีเมล','Plan','วันหมดอายุ','สมัครเมื่อ','Login ล่าสุด','UID']];
+  list.forEach(u=>{
     const exp = getExpiry(u);
     const isPrem = u.plan==='premium' && exp>now;
     const isTrial = u.plan==='trial' && exp>now;
@@ -638,6 +739,7 @@ window.exportUsersCSV = () => {
       isPrem?'premium':isTrial?'trial':'free',
       (isPrem||isTrial)?formatDate(exp):'',
       formatDate(u.createdAt),
+      u.lastLogin ? formatDateTime(u.lastLogin) : '--',
       u.uid||''
     ]);
   });
