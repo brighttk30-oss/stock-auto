@@ -347,8 +347,7 @@ async function sendLineNotify(token, message) {
 // ── UPDATE STATS (marketData/stats) ──
 async function updateStats() {
   try {
-    console.log('
-console.log(`\n📊 Updating stats...`);
+    console.log(`\n📊 Updating stats...`);
     const usersSnap = await db.collection('users').get();
     let totalUsers = 0, premiumUsers = 0;
     for (const userDoc of usersSnap.docs) {
