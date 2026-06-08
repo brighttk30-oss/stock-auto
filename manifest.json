@@ -1,0 +1,37 @@
+{
+  "name": "StockAI — Portfolio Dashboard",
+  "short_name": "StockAI",
+  "description": "ติดตามพอร์ตหุ้นอัจฉริยะด้วย AI วิเคราะห์ตลาด",
+  "start_url": "/stock-auto/stock-dashboard.html",
+  "scope": "/stock-auto/",
+  "display": "standalone",
+  "background_color": "#080c10",
+  "theme_color": "#00d4aa",
+  "orientation": "portrait-primary",
+  "lang": "th",
+  "categories": ["finance", "productivity"],
+  "screenshots": [],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "เปิดพอร์ต",
+      "short_name": "พอร์ต",
+      "description": "ดูพอร์ตหุ้นของฉัน",
+      "url": "/stock-auto/stock-dashboard.html",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
