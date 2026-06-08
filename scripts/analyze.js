@@ -90,7 +90,7 @@ async function callAI(prompt, maxTokens = 900) {
 
 // ── MODE: วิเคราะห์พอร์ต user ทั้งหมด (21:00) ──
 async function analyzeUserPortfolios() {
-  console.log('\n📊 MODE: Analyze User Portfolios (21:00)');
+  console.log(`\n📊 MODE: Analyze User Portfolios (21:00)`);
 
   // ดึง users ทั้งหมดที่เป็น Premium
   const usersSnap = await db.collection('users').get();
@@ -226,14 +226,14 @@ async function analyzeUserPortfolios() {
 
 // ── MODE: วิเคราะห์ watchlist 30 ตัว + สร้าง recommendation (08:00) ──
 async function analyzeWatchlistAndRecommend() {
-  console.log('\n🌅 MODE: Watchlist Analysis + Recommendations (08:00)');
+  console.log(`\n🌅 MODE: Watchlist Analysis + Recommendations (08:00)`);
 
   const now = new Date();
   const thaiDate = now.toLocaleDateString('th-TH', { timeZone: 'Asia/Bangkok' });
   const thaiTime = now.toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok', hour: '2-digit', minute: '2-digit' });
 
   // ── ขั้นตอน 1: ดึงราคาปิดล่าสุด 30 ตัว ──
-  console.log('\n📡 Fetching prices for 30 watchlist stocks...');
+  console.log(`\n📡 Fetching prices for 30 watchlist stocks...`);
   const allSyms = WATCHLIST.map(w => w.s);
   const priceMap = {};
 
@@ -249,7 +249,7 @@ async function analyzeWatchlistAndRecommend() {
   console.log(`✅ Got prices for ${priceCount}/${allSyms.length} stocks`);
 
   // ── ขั้นตอน 2: ส่งให้ AI วิเคราะห์ทั้งหมดในครั้งเดียว ──
-  console.log('\n🤖 AI analyzing all stocks...');
+  console.log(`\n🤖 AI analyzing all stocks...`);
 
   const stockData = WATCHLIST
     .filter(w => priceMap[w.s])
@@ -316,7 +316,7 @@ ${stockData}
     thaiTime
   });
 
-  console.log('\n💾 Saved recommendations to Firestore: marketData/recommendations');
+  console.log(`\n💾 Saved recommendations to Firestore: marketData/recommendations`);
 
   // ── ขั้นตอน 4: update stats ──
   await updateStats();
@@ -394,7 +394,7 @@ async function main() {
     await analyzeUserPortfolios();
   }
 
-  console.log('\n🎉 All done!');
+  console.log(`\n🎉 All done!`);
 }
 
 main().catch(e => {
