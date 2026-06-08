@@ -2,14 +2,21 @@ name: Auto Stock Analysis
 
 on:
   schedule:
-    # 08:00 Bangkok = 01:00 UTC (วิเคราะห์ watchlist + recommendation + portfolios)
+    # ── TICKER WATCHLIST (ทุก 20 นาที ช่วงตลาด US เปิด) ──
+    # ตลาด US: 20:30-04:00 น. ไทย = 13:30-21:00 UTC
+    # ใช้ TD_KEY_2 แยก quota จาก portfolio
+    - cron: '0,20,40 13,14,15,16,17,18,19,20 * * 1-5'
+
+    # ── AI ANALYSIS ──
+    # 08:00 Bangkok = 01:00 UTC (วิเคราะห์ watchlist + rec + portfolios)
     - cron: '0 1 * * 1-5'
     # 21:00 Bangkok = 14:00 UTC (วิเคราะห์ portfolios อย่างเดียว)
     - cron: '0 14 * * 1-5'
+
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Run mode (auto = ตามเวลา, morning = watchlist+rec, evening = portfolios only)'
+        description: 'Run mode: auto / ticker / morning / evening'
         required: false
         default: 'auto'
 
@@ -27,10 +34,35 @@ jobs:
       - name: Install dependencies
         run: npm install node-fetch@3 firebase-admin
 
+      - name: Determine run mode
+        id: mode
+        run: |
+          EVENT="${{ github.event_name }}"
+          INPUT_MODE="${{ github.event.inputs.mode }}"
+          HOUR=$(TZ='UTC' date +%H)
+          MIN=$(TZ='UTC' date +%M)
+
+          # ตรวจสอบว่าเป็น ticker schedule ไหม
+          # ticker schedule: ชั่วโมง 13-20 UTC ทุก 20 นาที
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$INPUT_MODE" = "ticker" ]; then
+            echo "RUN_MODE=ticker" >> $GITHUB_ENV
+          elif [ "$EVENT" = "schedule" ] && [ "$HOUR" -ge 13 ] && [ "$HOUR" -le 20 ]; then
+            # ชั่วโมงช่วงตลาด → เป็น ticker mode ถ้าไม่ใช่ 08:00 หรือ 21:00
+            if [ "$HOUR" = "1" ] || [ "$HOUR" = "14" ]; then
+              echo "RUN_MODE=auto" >> $GITHUB_ENV
+            else
+              echo "RUN_MODE=ticker" >> $GITHUB_ENV
+            fi
+          else
+            echo "RUN_MODE=auto" >> $GITHUB_ENV
+          fi
+          echo "Mode: $RUN_MODE, Hour: $HOUR, Event: $EVENT"
+
       - name: Run analysis
         env:
           OPENROUTER_KEY: ${{ secrets.OPENROUTER_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           TWELVE_DATA_KEY: ${{ secrets.TWELVE_DATA_KEY }}
+          TWELVE_DATA_KEY_2: ${{ secrets.TWELVE_DATA_KEY_2 }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: node scripts/analyze.js
