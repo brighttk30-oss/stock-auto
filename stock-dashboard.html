@@ -890,9 +890,9 @@ onAuthStateChanged(auth, async (user) => {
     onSnapshot(doc(db,'users',user.uid,'profile','data'), (snap)=>{
       if(!snap.exists()) return;
       userProfile = snap.data();
-      _lastPremiumState = null;
+      _lastPremiumState = undefined; // ← undefined ไม่ใช่ null เพื่อ force hook ทุกครั้ง
       updateUserUI();
-      renderHoldings(); // จะ trigger hook render AI/lock ตาม isPremium()
+      renderHoldings(); // hook จะเห็น currentPremium !== undefined → render เสมอ
     }, (err)=>console.warn('profile snapshot:', err.message));
 
     // fetch FX ก่อน + รอ portfolioListener ดึงราคาจาก Firestore
