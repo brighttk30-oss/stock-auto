@@ -882,14 +882,7 @@ onAuthStateChanged(auth, async (user) => {
         aiCache = data.aiCache||{};
         newsCache = data.newsCache||[];
         lastNewsTime = data.lastNewsTime||0;
-        renderHoldings();
-        if(userProfile && isPremium()){
-          // มี AI cards อยู่แล้วหรือยัง?
-          const aiSec = document.getElementById('aiSection');
-          if(aiSec && !aiSec.querySelector('.ai-card')) renderAICards();
-          if(newsCache.length) renderNews();
-        }
-        // ไม่ render lock ที่นี่ — onSnapshot profile จัดการ
+        renderHoldings(); // hook จัดการ AI rendering อัตโนมัติ
       }
     }, (err)=>console.warn('onSnapshot error:', err.message));
 
@@ -1026,7 +1019,7 @@ async function initUserData(){
       newsCache = data.newsCache||[];
       lastNewsTime = data.lastNewsTime||0;
       renderHoldings();
-      if(userProfile && isPremium()){ renderAICards(); if(newsCache.length) renderNews(); }
+      // hook renderHoldings จัดการ AI rendering
     }
   }, (err) => { console.warn('onSnapshot error:', err.message); });
 }
@@ -1145,7 +1138,6 @@ window.addHolding = async () => {
   showToast('⏳ กำลังโหลดราคา '+ticker+'...');
   fetchPriceDirect(ticker, type).then(() => {
     renderHoldings();
-    if(isPremium()) renderAICards();
     showToast('✅ เพิ่ม '+ticker+' เรียบร้อย');
   }).catch(() => {
     renderHoldings(); // แสดงแม้ไม่ได้ราคา
@@ -1157,7 +1149,7 @@ window.removeHolding = async (ticker) => {
   holdings=holdings.filter(h=>h.ticker!==ticker); delete prices[ticker]; delete aiCache[ticker];
   if(selectedTicker===ticker) closeChart();
   if(currentUser) await saveDB(); else saveGuestHoldings();
-  renderHoldings(); if(isPremium()) renderAICards(); showToast('🗑 ลบ '+ticker);
+  renderHoldings(); showToast('🗑 ลบ '+ticker);
 };
 
 // ── TWELVE DATA PRICE ──
