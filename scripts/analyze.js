@@ -33,14 +33,23 @@ const WATCHLIST = [
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── TWELVE DATA: ดึงราคาแบบ batch ──
-async function fetchPriceBatch(symbols) {
+async function fetchPriceBatch(symbols, apiKey=TD_KEY) {
   const joined = symbols.join(',');
   try {
     const res = await fetch(
-      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(joined)}&apikey=${TD_KEY}`,
+      `https://api.twelvedata.com/quote?symbol=${encodeURIComponent(joined)}&apikey=${apiKey}`,
       { signal: AbortSignal.timeout(20000) }
     );
+    if(res.status === 429) {
+      console.warn('⚠️ 429 Too Many Requests — หยุดชั่วคราว 60s');
+      await sleep(60000);
+      return {};
+    }
     const data = await res.json();
+    if(data.message?.toLowerCase().includes('run out') || data.code === 429) {
+      console.warn('⚠️ Quota exhausted:', data.message);
+      return { _quotaExhausted: true };
+    }
     if (data.status === 'error') {
       console.error('TwelveData error:', data.message);
       return {};
@@ -122,9 +131,10 @@ async function analyzeUserPortfolios() {
       if (usTickers.length) {
         for (let i = 0; i < usTickers.length; i += 8) {
           const batch = usTickers.slice(i, i + 8);
-          const res = await fetchPriceBatch(batch);
+          const res = await fetchPriceBatch(batch, TD_KEY);
+          if(res._quotaExhausted) { console.warn('TD_KEY quota หมด'); break; }
           Object.assign(priceMap, res);
-          await sleep(500);
+          if(i + 8 < usTickers.length) await sleep(10000);
         }
       }
 
@@ -257,12 +267,15 @@ async function analyzeWatchlistAndRecommend() {
   const allSyms = WATCHLIST.map(w => w.s);
   const priceMap = {};
 
+  // Rate limit: 8 req/min = 1 req ทุก 7.5s
+  // batch 8 ตัว = 1 req, delay 10s = ปลอดภัย (6 req/min)
   for (let i = 0; i < allSyms.length; i += 8) {
     const batch = allSyms.slice(i, i + 8);
     console.log(`  Batch ${Math.floor(i/8)+1}: ${batch.join(', ')}`);
-    const res = await fetchPriceBatch(batch);
+    const res = await fetchPriceBatch(batch, TD_KEY_2); // ใช้ KEY_2 แยก quota
+    if(res._quotaExhausted) { console.warn('KEY_2 quota หมด'); break; }
     Object.assign(priceMap, res);
-    await sleep(600);
+    if(i + 8 < allSyms.length) await sleep(10000); // 10s ระหว่าง batch
   }
 
   const priceCount = Object.keys(priceMap).length;
@@ -562,7 +575,7 @@ async function collectAndCachePrices() {
         };
       });
     } catch(e) { console.warn('Batch error:', e.message); }
-    if(i+8 < allFetch.length) await sleep(800);
+    if(i+8 < allFetch.length) await sleep(10000); // 10s ระหว่าง batch (6 req/min)
   }
 
   console.log(`✅ Fetched ${Object.keys(priceMap).length}/${tickers.length} prices`);
@@ -640,9 +653,9 @@ async function main() {
       break;
     case 'morning':
       console.log('🌅 AI analysis + recommendations');
-      await analyzeWatchlistAndRecommend();
-      if(TD_KEY_2) await fetchWatchlistPrices();
-      await collectAndCachePrices();
+      await analyzeWatchlistAndRecommend(); // AI + watchlist prices
+      await sleep(20000); // รัก 20s
+      await collectAndCachePrices(); // portfolio prices
       break;
     case 'news':
       console.log('📰 ข่าวสาร 1 ทุ่ม');
@@ -651,10 +664,12 @@ async function main() {
       break;
     case 'ticker':
       console.log('📊 ราคา real-time ช่วงตลาดเปิด');
-      await Promise.all([
-        TD_KEY_2 ? fetchWatchlistPrices() : Promise.resolve(),
-        collectAndCachePrices()
-      ]);
+      // แยก sequential — ไม่ parallel เพราะจะชนกัน rate limit
+      if(TD_KEY_2) {
+        await fetchWatchlistPrices(); // KEY_2: 30 ตัว ~60s
+      }
+      await sleep(15000); // รัก 15s ก่อนเริ่ม portfolio
+      await collectAndCachePrices(); // KEY_1: portfolio users
       break;
     default:
       console.log('🔄 วิเคราะห์ portfolios');
