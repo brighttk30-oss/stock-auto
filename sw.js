@@ -1,5 +1,5 @@
 // ── StockAI Service Worker ──
-const CACHE_VERSION = 'stockai-v3';
+const CACHE_VERSION = 'stockai-v4';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const DYNAMIC_CACHE = `${CACHE_VERSION}-dynamic`;
 
@@ -48,9 +48,19 @@ self.addEventListener('fetch', event => {
   if(event.request.method !== 'GET') return;
   if(url.protocol === 'chrome-extension:') return;
 
-  if(STATIC_ASSETS.includes(url.pathname) ||
-     url.hostname.includes('fonts.gstatic.com') ||
+  // HTML: network-first เสมอ ให้ได้ไฟล์ใหม่ทุกครั้ง
+  if(url.pathname.endsWith('.html')) {
+    event.respondWith(networkFirst(event.request));
+    return;
+  }
+  // Fonts + icons: cache-first (ไม่เปลี่ยน)
+  if(url.hostname.includes('fonts.gstatic.com') ||
      url.hostname.includes('fonts.googleapis.com')) {
+    event.respondWith(cacheFirst(event.request));
+    return;
+  }
+  // Static assets: cache-first
+  if(STATIC_ASSETS.includes(url.pathname)) {
     event.respondWith(cacheFirst(event.request));
     return;
   }

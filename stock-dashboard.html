@@ -299,8 +299,9 @@ tr:hover td{background:rgba(0,212,170,0.03);}
   <div style="font-size:0.78rem;color:var(--text2);margin-bottom:4px;" id="menuUserName">--</div>
   <div style="font-size:0.7rem;color:var(--text3);font-family:'Space Mono',monospace;margin-bottom:14px;" id="menuUserEmail">--</div>
   <div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:8px;">
-    <button class="btn btn-gold btn-sm" style="width:100%" onclick="openModal('upgradeModal');toggleUserMenu()">⭐ อัปเกรด Premium</button>
-    <button class="btn btn-outline btn-sm" style="width:100%" onclick="openSettings()">⚙ ตั้งค่า API</button>
+    <div id="menuUpgradeBtn"><button class="btn btn-gold btn-sm" style="width:100%" onclick="openModal('upgradeModal');toggleUserMenu()">⭐ อัปเกรด Premium</button></div>
+    <div id="menuPremiumBadge" style="display:none;background:rgba(247,201,72,0.1);border:1px solid rgba(247,201,72,0.3);border-radius:8px;padding:8px 12px;text-align:center;font-size:0.75rem;color:var(--gold);">⭐ Premium Member</div>
+    <button class="btn btn-outline btn-sm" style="width:100%" onclick="openSettings()">⚙ ตั้งค่า</button>
     <button class="btn btn-danger btn-sm" style="width:100%" onclick="doLogout()">ออกจากระบบ</button>
   </div>
 </div>
@@ -981,6 +982,12 @@ function updateUserUI(){
   document.getElementById('userAvatar').textContent = initial;
   document.getElementById('menuUserName').textContent = name;
   document.getElementById('menuUserEmail').textContent = currentUser?.email || '';
+  // toggle upgrade/premium badge ใน user menu
+  const upgradeBtn = document.getElementById('menuUpgradeBtn');
+  const premiumBadge = document.getElementById('menuPremiumBadge');
+  const isCurrentlyPremium = isPremium();
+  if(upgradeBtn) upgradeBtn.style.display = isCurrentlyPremium ? 'none' : 'block';
+  if(premiumBadge) premiumBadge.style.display = isCurrentlyPremium ? 'block' : 'none';
   const badge = document.getElementById('userPlanBadge');
   // ใช้ getExpiry() เพื่อรองรับทั้ง Firestore Timestamp และ number
   const expiry = getExpiry(userProfile);
