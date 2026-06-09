@@ -653,10 +653,12 @@ function getExpiry(profile){
   return Number(exp) || 0;
 }
 function isPremium(){
-  if(!userProfile) return false;
+  if(!userProfile) { console.warn('[isPremium] userProfile=null'); return false; }
   const plan = userProfile.plan;
   const expiry = getExpiry(userProfile);
-  return (plan === 'premium' || plan === 'trial') && expiry > Date.now();
+  const result = (plan === 'premium' || plan === 'trial') && expiry > Date.now();
+  console.log('[isPremium]', {plan, expiry, now: Date.now(), result});
+  return result;
 }
 function isAdmin(){ return currentUser?.email === ADMIN_EMAIL || userProfile?.isAdmin === true; }
 function getKey(){
