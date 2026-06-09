@@ -2597,19 +2597,32 @@ window.renderHoldings = function(){
       const atLimit = !isPremium() && holdings.length>=(currentUser?10:5);
       ctr.innerHTML = `<span style="color:${atLimit?'var(--red)':'var(--text3)'};">${holdings.length}/${max}</span> — คลิกแถวเพื่อดูกราฟ`;
     }
-    // render AI ตาม premium state — เช็คทุกครั้ง
-    const currentPremium = isPremium();
-    if(currentPremium !== _lastPremiumState){
-      _lastPremiumState = currentPremium;
-      if(currentPremium) {
-        renderAICards();
-        // ซ่อน lock screen ถ้ามี
-        const lockEl = document.getElementById('aiLockScreen');
-        if(lockEl) lockEl.style.display = 'none';
-      } else {
-        renderLockedAI();
-      }
-    }
+   // render AI ตาม premium state — เช็คทุกครั้ง
+        const currentPremium = isPremium();
+        if(currentPremium !== _lastPremiumState){
+          _lastPremiumState = currentPremium;
+          if(currentPremium) {
+            // --- เพิ่มโค้ดส่วนนี้เพื่อสร้าง Container คืนมา ---
+            if(!document.getElementById('aiGrid')) {
+              document.getElementById('aiSection').innerHTML = `
+                <div class="ai-grid" id="aiGrid"></div>
+                <div style="margin-bottom:24px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                  <button class="btn btn-outline btn-sm" onclick="openAnalyzeSelector()">🤖 เลือกวิเคราะห์ (สูงสุด 5 ตัว)</button>
+                  <span style="font-size:0.68rem;color:var(--text3);font-family:'Space Mono',monospace;">Bull + Bear + สรุป + แนวรับ/แนวต้าน</span>
+                </div>
+              `;
+            }
+            if(!document.getElementById('newsGrid')) {
+              document.getElementById('newsSection').innerHTML = '<div class="news-grid" id="newsGrid"></div>';
+            }
+            // ---------------------------------------------
+            
+            renderAICards();
+            if(newsCache && newsCache.length > 0) renderNews();
+          } else {
+            renderLockedAI();
+          }
+        }
   } catch(e) {
     console.warn('renderHoldings error:', e.message);
   } finally {
