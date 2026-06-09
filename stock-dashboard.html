@@ -1878,6 +1878,44 @@ const TICKER_TTL = 30 * 60 * 1000; // cache 30 นาที (ลดจาก 15 
 // ไม่มี direct API calls จาก browser
 
 
+function renderTicker1() {
+  const wrap = document.getElementById('tickerWrap1');
+  const inner = document.getElementById('tickerInner1');
+  if (!wrap || !inner) return;
+  wrap.style.display = 'flex';
+
+  const allSyms = [
+    ...TICKER_WATCHLIST.map(w => w.s),
+    ...holdings.filter(h => h.type === 'US').map(h => h.ticker)
+  ].filter((v, i, a) => a.indexOf(v) === i); // unique
+
+  const items = allSyms.map(sym => {
+    const raw = tickerPrices[sym] || prices[sym];
+    if (!raw) return null;
+    const price = parseFloat(raw.price || raw.current || 0);
+    if (!price) return null;
+    const change = parseFloat(raw.change || 0);
+    const changePct = parseFloat(raw.changePct || 0);
+    const isUp = change >= 0;
+    const color = isUp ? 'var(--green)' : 'var(--red)';
+    const arrow = isUp ? '▲' : '▼';
+    const name = TICKER_WATCHLIST.find(w => w.s === sym)?.n || sym;
+    return `<span class="ticker-item">
+      <span class="ticker-sym">${sym}</span>
+      <span class="ticker-price">$${price.toFixed(2)}</span>
+      <span style="color:${color};font-size:0.62rem;">${arrow} ${Math.abs(changePct).toFixed(2)}%</span>
+    </span>`;
+  }).filter(Boolean);
+
+  if (!items.length) {
+    inner.innerHTML = '<span style="color:var(--text3);font-size:0.72rem;padding:0 16px;">กำลังโหลดราคา...</span>';
+    return;
+  }
+
+  const doubled = [...items, ...items].join('');
+  inner.innerHTML = doubled;
+}
+
 function renderTicker2() {
   const wrap = document.getElementById('tickerWrap2');
   const inner = document.getElementById('tickerInner2');
@@ -2305,6 +2343,19 @@ function showGuestSaveBanner(){
   t.innerHTML = '✅ เพิ่มแล้ว — <span style="text-decoration:underline;cursor:pointer;" onclick="showAuthScreen()">สมัครฟรีเพื่อบันทึกถาวร</span>';
   t.className = 'toast show';
   setTimeout(()=>{ t.classList.remove('show'); t.innerHTML=''; }, 5000);
+}
+
+// ── TOAST NOTIFICATION ──
+function showToast(msg, isError=false, duration=3000){
+  const t = document.getElementById('toast');
+  if(!t) return;
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => {
+    t.className = 'toast';
+    t.textContent = '';
+  }, duration);
 }
 
 // sync guest — ไม่ sync อัตโนมัติ แยก guest/login เป็นอิสระ
