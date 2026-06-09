@@ -888,20 +888,37 @@ onAuthStateChanged(auth, async (user) => {
     // รอ 2 วินาทีให้ portfolioListener โหลดก่อน แล้วค่อยเติมที่ขาด
     setTimeout(()=>{ if(holdings.length) fetchAllPrices(); }, 2000);
 
-    // render AI
-    if(isPremium()){
-      renderAICards();
-      if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
-    } else {
-      renderLockedAI();
-    }
-
     if(getKey()) setupAutoSchedule();
     startPortfolioPriceListener(); // ราคาจาก Firestore (เร็ว ไม่กิน quota)
     startTickerUpdates();
     startCentralRefresh();
     // sync guest หลังจาก listeners พร้อมแล้ว (non-blocking)
     setTimeout(() => syncGuestToFirestore().catch(e=>console.warn('sync guest:', e.message)), 2000);
+
+    // render AI หลัง listeners พร้อม — ให้ userProfile โหลดครบก่อน
+    // delay 500ms เผื่อ profile snapshot trigger ก่อน
+    setTimeout(() => {
+      _lastPremiumState = null; // force re-evaluate
+      if(isPremium()){
+        renderAICards();
+        if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+      } else {
+        // reload profile อีกครั้งเผื่อ Firestore ยังไม่ส่งมา
+        getDoc(doc(db,'users',currentUser.uid,'profile','data')).then(snap=>{
+          if(snap.exists()){
+            userProfile = snap.data();
+            _lastPremiumState = null;
+            if(isPremium()){
+              renderAICards();
+              if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+              renderHoldings(); // force re-render to hide lock
+            } else {
+              renderLockedAI();
+            }
+          }
+        }).catch(()=>renderLockedAI());
+      }
+    }, 500);
   } else {
     // GUEST MODE: แสดงหน้าหลักทันที ไม่บังคับ login
     currentUser = null;
