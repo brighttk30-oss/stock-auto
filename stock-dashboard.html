@@ -987,6 +987,7 @@ function showTrialWarning(daysLeft){
 }
 
 function renderLockedAI(){
+  if(isPremium()) return; // ป้องกัน render lock ทับ AI cards
   document.getElementById('aiSection').innerHTML = `
     <div class="premium-lock">
       <div class="lock-icon">🔒</div>
@@ -2629,9 +2630,9 @@ function renderTeaserAI(){
   aiSection.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;">${teaserHTML}</div>`;
 }
 
-// แก้ renderLockedAI ให้ใช้ teaser แทน
+// renderLockedAI — ใช้ teaser ถ้ามีหุ้น
 window.renderLockedAI = function(){
-  if(isPremium()) return; // ถ้าเป็น premium ไม่ต้องแสดง lock
+  if(isPremium()) return;
   if(holdings.length > 0) renderTeaserAI();
   else {
     document.getElementById('aiSection').innerHTML = `
