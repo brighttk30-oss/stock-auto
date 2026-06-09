@@ -564,11 +564,13 @@ async function collectAndCachePrices() {
         // map symbol กลับเป็น ticker จริง
         const ticker = sym.replace('/USD','').replace(':SET','').replace('XAU/USD','XAUUSD');
         priceMap[ticker] = {
-          current: cur, prev,
+          price: cur,    // ใช้ 'price' ให้ตรงกับ tickerPrices structure
+          current: cur,  // เก็บทั้งสองเพื่อ backward compat
+          prev,
           change: cur-prev,
           changePct: prev>0?((cur-prev)/prev*100):0,
-          high52: parseFloat(q.fifty_two_week?.high||cur),
-          low52: parseFloat(q.fifty_two_week?.low||cur),
+          high52: parseFloat(q.fifty_two_week?.high||q['52_week']?.high||cur),
+          low52: parseFloat(q.fifty_two_week?.low||q['52_week']?.low||cur),
           dayHigh: parseFloat(q.high)||cur,
           dayLow: parseFloat(q.low)||cur,
           updatedAt: now.toISOString()
@@ -599,7 +601,14 @@ async function collectAndCachePrices() {
       const holdings = portSnap.data().holdings||[];
       const priceCache = {};
       holdings.forEach(h => {
-        if(priceMap[h.ticker]) priceCache[h.ticker] = priceMap[h.ticker];
+        if(priceMap[h.ticker]) {
+          const pm = priceMap[h.ticker];
+          priceCache[h.ticker] = {
+            ...pm,
+            price: pm.current || pm.price,
+            current: pm.current || pm.price
+          };
+        }
       });
       if(Object.keys(priceCache).length) {
         await db.doc(`users/${userDoc.id}/portfolio/main`).set(
