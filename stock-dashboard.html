@@ -819,14 +819,29 @@ onAuthStateChanged(auth, async (user) => {
       lastNewsTime = data.lastNewsTime||0;
       // โหลด priceCache ทันที → เห็นราคาก่อน fetch จริง
       const priceCache = data.priceCache||{};
+      let cacheCount = 0;
       Object.entries(priceCache).forEach(([ticker,p])=>{
-        if(p?.current){
-          prices[ticker] = p;
-          _quoteCache[ticker] = {close:String(p.current),previous_close:String(p.prev||p.current),high:String(p.dayHigh||p.current),low:String(p.dayLow||p.current)};
-          _quoteCacheTime[ticker] = Date.now();
-        }
+        if(!p) return;
+        const cur = parseFloat(p.current || p.price || 0);
+        if(!cur) return;
+        const prev = parseFloat(p.prev || cur);
+        prices[ticker] = {
+          current: cur, prev,
+          change: p.change||(cur-prev),
+          changePct: p.changePct||0,
+          high52: parseFloat(p.high52||cur),
+          low52: parseFloat(p.low52||cur),
+          dayHigh: parseFloat(p.dayHigh||cur),
+          dayLow: parseFloat(p.dayLow||cur)
+        };
+        _quoteCache[ticker] = {
+          close: String(cur), previous_close: String(prev),
+          high: String(p.dayHigh||cur), low: String(p.dayLow||cur)
+        };
+        _quoteCacheTime[ticker] = Date.now();
+        cacheCount++;
       });
-      if(Object.keys(priceCache).length) console.log(`[Cache] ${Object.keys(priceCache).length} prices from Firestore`);
+      if(cacheCount) console.log(`[Cache] ${cacheCount} prices from Firestore priceCache`);
     }
 
     // ── STEP 2: render ทันทีด้วย priceCache ──
@@ -1882,7 +1897,12 @@ async function fetchTickerParallel(symbols) {
 }
 
 function buildTickerItem(sym, name) {
-  const p = tickerPrices[sym] || prices[sym];
+  const raw = tickerPrices[sym] || prices[sym];
+  const p = raw ? {
+    price: parseFloat(raw.price || raw.current || 0),
+    change: raw.change || 0,
+    changePct: raw.changePct || 0
+  } : null;
   if (!p) return '';
   const price = p.price ?? p.current;
   const pct = p.changePct ?? 0;
@@ -2053,25 +2073,28 @@ function startPortfolioPriceListener() {
 
       holdings.forEach(h => {
         const p = cached[h.ticker];
-        // ถ้าไม่มีใน Firestore ให้คงราคาเดิมไว้ ไม่ reset
         if(!p) return;
-        // อัปเดตเฉพาะถ้าราคาใหม่กว่าหรือยังไม่มี
-        const existing = prices[h.ticker];
+        // รองรับทั้ง p.current (portfolioPrices) และ p.price (tickerPrices)
+        const cur = parseFloat(p.current || p.price || 0);
+        if(!cur) return;
+        const prev = parseFloat(p.prev || p.previous_close || cur);
         const firestoreTime = new Date(p.updatedAt||0).getTime();
         const cacheTime = _quoteCacheTime[h.ticker]||0;
-        if(existing && cacheTime > firestoreTime) return; // ราคา local ใหม่กว่า ไม่ทับ
+        if(prices[h.ticker] && cacheTime > firestoreTime) return;
         prices[h.ticker] = {
-          current: p.current, prev: p.prev||p.current,
-          change: p.change||(p.current-(p.prev||p.current)),
+          current: cur, prev,
+          change: p.change||(cur-prev),
           changePct: p.changePct||0,
-          high52: p.high52||p.current, low52: p.low52||p.current,
-          dayHigh: p.dayHigh||p.current, dayLow: p.dayLow||p.current
+          high52: parseFloat(p.high52||cur),
+          low52: parseFloat(p.low52||cur),
+          dayHigh: parseFloat(p.dayHigh||cur),
+          dayLow: parseFloat(p.dayLow||cur)
         };
         _quoteCache[h.ticker] = {
-          close: String(p.current),
-          previous_close: String(p.prev||p.current),
-          high: String(p.dayHigh||p.current),
-          low: String(p.dayLow||p.current)
+          close: String(cur),
+          previous_close: String(prev),
+          high: String(p.dayHigh||cur),
+          low: String(p.dayLow||cur)
         };
         _quoteCacheTime[h.ticker] = firestoreTime || Date.now();
         updated++;
@@ -2112,9 +2135,19 @@ function startTickerUpdates() {
       const now = Date.now();
       let count = 0;
       Object.entries(cached).forEach(([sym, p]) => {
-        if(!p || !p.price) return;
-        tickerPrices[sym] = p;
-        _tickerCache[sym] = p;
+        if(!p) return;
+        // รองรับทั้ง p.price (fetchWatchlistPrices) และ p.current (collectAndCache)
+        const pr = p.price || p.current || 0;
+        if(!pr) return;
+        const entry = {
+          price: parseFloat(pr),
+          change: p.change || 0,
+          changePct: p.changePct || 0,
+          high52: p.high52 || pr,
+          low52: p.low52 || pr
+        };
+        tickerPrices[sym] = entry;
+        _tickerCache[sym] = entry;
         _tickerCacheTime[sym] = now;
         count++;
       });
