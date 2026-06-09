@@ -617,10 +617,10 @@ const ADMIN_EMAIL = 'brighttk30@gmail.com';
 const TD_KEY = '5e8d9f5961fe44a19469c848bc360bb2';
 // OpenRouter Key — ใช้เฉพาะ Premium เท่านั้น (เช็ค isPremium() ก่อนทุกครั้ง)
 // AI key — assembled at runtime (Premium only)
-const _k1='sk-or-v1-ebd04f6e';
-const _k2='15c56c399e0ae968';
-const _k3='41695bc98dab5dbf';
-const _k4='6dea1ddd352e715c22180f4d';
+const _k1='sk-or-v1-44fe8e916';
+const _k2='dccac6920a469378';
+const _k3='56e9b25df06c98cd';
+const _k4='f768c28a9a8ba9852d2909f';
 const OR_KEY = _k1+_k2+_k3+_k4;
 // OpenRouter Key — ใช้ได้เฉพาะ Premium เท่านั้น
 
@@ -926,8 +926,7 @@ onAuthStateChanged(auth, async (user) => {
       _lastPremiumState = null; // force re-evaluate
       if(isPremium()){
         renderAICards();
-        if(window.renderNews) window.renderNews(); else if(typeof renderNews !== 'undefined') renderNews();
-        if(lastNewsTime>0 && newsCache.length){ startNewsCountdown(); }
+        if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
       } else {
         // reload profile อีกครั้งเผื่อ Firestore ยังไม่ส่งมา
         getDoc(doc(db,'users',currentUser.uid,'profile','data')).then(snap=>{
@@ -936,8 +935,7 @@ onAuthStateChanged(auth, async (user) => {
             _lastPremiumState = null;
             if(isPremium()){
               renderAICards();
-              if(window.renderNews) window.renderNews(); else if(typeof renderNews !== 'undefined') renderNews();
-              if(lastNewsTime>0 && newsCache.length){ startNewsCountdown(); }
+              if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
               renderHoldings(); // force re-render to hide lock
             } else {
               renderLockedAI();
@@ -1674,16 +1672,11 @@ async function callAI(key,prompt,maxTokens=700){
   if(data.error) throw new Error(JSON.stringify(data.error));
   return data.choices?.[0]?.message?.content||'';
 }
-window.renderAICards = function() {
-  const section = document.getElementById('aiSection');
-  if(!section) return;
-  
-  if(!holdings.length){ 
-    section.innerHTML = '<div class="ai-grid" id="aiGrid"><div style="color:var(--text3);font-size:0.78rem;font-family:\'Space Mono\',monospace;padding:16px;">เพิ่มหุ้นก่อนแล้ว AI จะวิเคราะห์ให้ครับ</div></div>'; 
-    return; 
-  }
-  
-  const cardsHTML = holdings.map(h=>{
+function renderAICards(){
+  const grid=document.getElementById('aiGrid');
+  if(!grid) return;
+  if(!holdings.length){ grid.innerHTML='<div style="color:var(--text3);font-size:0.78rem;font-family:\'Space Mono\',monospace;padding:16px;">เพิ่มหุ้นก่อนแล้ว AI จะวิเคราะห์ให้ครับ</div>'; return; }
+  grid.innerHTML=holdings.map(h=>{
     const c=aiCache[h.ticker];
     return `<div class="ai-card" id="aiCard-${h.ticker}">
       <div class="ai-card-header"><div class="ai-ticker">${h.ticker}</div><div id="aiSentiment-${h.ticker}" class="sentiment-badge neut">${c?c.sentiment:'--'}</div></div>
@@ -1696,17 +1689,8 @@ window.renderAICards = function() {
       </div>
     </div>`;
   }).join('');
-  
-  section.innerHTML = `
-    <div class="ai-grid" id="aiGrid">${cardsHTML}</div>
-    <div style="margin-bottom:24px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <button class="btn btn-outline btn-sm" onclick="openAnalyzeSelector()">🤖 เลือกวิเคราะห์ (สูงสุด 5 ตัว)</button>
-      <span style="font-size:0.68rem;color:var(--text3);font-family:'Space Mono',monospace;">Bull + Bear + สรุป + แนวรับ/แนวต้าน</span>
-    </div>
-  `;
-  
   holdings.forEach(h=>{ const c=aiCache[h.ticker]; if(c){const b=document.getElementById(`aiSentiment-${h.ticker}`);if(b){b.textContent=c.sentiment;b.className='sentiment-badge '+c.sentimentClass;}} updateNewsTab(h.ticker); });
-};
+}
 function renderAnalysis(c){ return `<div class="ai-section"><div class="ai-section-label bull-label">🟢 Bull Case</div><div class="ai-text">${c.bull||'--'}</div></div><div class="ai-section"><div class="ai-section-label bear-label">🔴 Bear Case</div><div class="ai-text">${c.bear||'--'}</div></div><div class="ai-section"><div class="ai-section-label sum-label">⚖️ สรุป</div><div class="ai-text">${c.summary||'--'}</div></div>${c.target?`<div class="target-price">🎯 Target: ${c.target}</div>`:''}`; }
 window.switchTab=(ticker,tab,btn)=>{ document.querySelectorAll(`#aiCard-${ticker} .ai-tab`).forEach(t=>t.classList.remove('active')); btn.classList.add('active'); document.getElementById(`tab-analysis-${ticker}`).classList.toggle('show',tab==='analysis'); document.getElementById(`tab-news-${ticker}`).classList.toggle('show',tab==='news'); };
 window.analyzeOne=async(ticker)=>{
@@ -1805,23 +1789,15 @@ JSON array เท่านั้น:
     await saveDB(); startNewsCountdown();
   }catch(e){ if(grid) grid.innerHTML=`<div class="news-loading">⚠️ ${e.message}</div>`; }
 }
-window.renderNews = function() {
-  const section = document.getElementById('newsSection'); 
-  if(!section) return;
-  
-  if(!newsCache || !newsCache.length){
-    section.innerHTML='<div class="news-grid" id="newsGrid"><div class="news-loading">กด "🤖 เลือกวิเคราะห์" และวิเคราะห์ เพื่อโหลดข่าว</div></div>';
-    return;
-  }
-  
-  const newsHTML = newsCache.map(n=>{
+function renderNews(){
+  const grid=document.getElementById('newsGrid'); if(!grid) return;
+  if(!newsCache.length){grid.innerHTML='<div class="news-loading">ไม่มีข่าว</div>';return;}
+  grid.innerHTML=newsCache.map(n=>{
     const ic=n.impact==='POSITIVE'?'news-pos':n.impact==='NEGATIVE'?'news-neg':'news-neu';
     const il=n.impact==='POSITIVE'?'▲ บวก':n.impact==='NEGATIVE'?'▼ ลบ':'◆ กลาง';
     return `<div class="news-card"><div class="news-top"><span class="news-ticker-tag">${n.ticker}</span><span class="news-impact ${ic}">${il}</span></div><div class="news-title">${n.title}</div><div class="news-summary">${n.summary}</div><div class="news-meta">${n.time}</div></div>`;
   }).join('');
-  
-  section.innerHTML = `<div class="news-grid" id="newsGrid">${newsHTML}</div>`;
-};
+}
 function updateNewsTab(ticker){ const el=document.getElementById(`newsFor-${ticker}`); if(!el)return; const tn=newsCache.filter(n=>n.ticker===ticker); if(!tn.length){el.innerHTML='<div style="color:var(--text3);font-size:0.73rem;font-family:\'Space Mono\',monospace;padding:8px 0;">ยังไม่มีข่าว</div>';return;} el.innerHTML=tn.map(n=>{const ic=n.impact==='POSITIVE'?'news-pos':n.impact==='NEGATIVE'?'news-neg':'news-neu';const il=n.impact==='POSITIVE'?'▲ บวก':n.impact==='NEGATIVE'?'▼ ลบ':'◆ กลาง';return `<div style="margin-bottom:10px;padding:10px;background:var(--surface2);border-radius:8px;"><div style="display:flex;justify-content:space-between;margin-bottom:5px;"><span style="font-size:0.62rem;color:var(--text3);font-family:'Space Mono',monospace;">${n.time}</span><span class="news-impact ${ic}">${il}</span></div><div class="news-title" style="margin-bottom:4px;">${n.title}</div><div class="news-summary">${n.summary}</div></div>`;}).join(''); }
 function startNewsCountdown(){ if(newsCountdown)clearInterval(newsCountdown); newsCountdown=setInterval(()=>{ const diff=3600000-(Date.now()-lastNewsTime); const el=document.getElementById('newsTimer'); if(!el)return; if(diff<=0){fetchNews(true);return;} const m=Math.floor(diff/60000),s=Math.floor((diff%60000)/1000); el.textContent=`อัปเดตใน ${m}:${s.toString().padStart(2,'0')}`; },1000); }
 
