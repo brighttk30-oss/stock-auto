@@ -1,5 +1,5 @@
 // ── StockAI Service Worker ──
-const CACHE_VERSION = 'stockai-v2';
+const CACHE_VERSION = 'stockai-v3';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const DYNAMIC_CACHE = `${CACHE_VERSION}-dynamic`;
 
