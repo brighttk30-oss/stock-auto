@@ -890,21 +890,29 @@ onAuthStateChanged(auth, async (user) => {
           if(aiSec && !aiSec.querySelector('.ai-card')) renderAICards();
           if(newsCache.length) renderNews();
         }
-        // ไม่ render lock ที่นี่ — ให้ _tryRenderAI จัดการ
+        // ไม่ render lock ที่นี่ — onSnapshot profile จัดการ
       }
     }, (err)=>console.warn('onSnapshot error:', err.message));
 
-    // subscribe profile changes (เมื่อ admin approve premium จะ update ทันที)
+    // subscribe profile — render AI ทันทีที่ได้ข้อมูล
     onSnapshot(doc(db,'users',user.uid,'profile','data'), (snap)=>{
       if(snap.exists()){
         const prev = userProfile?.plan;
         userProfile = snap.data();
-        // ถ้า plan เปลี่ยน → force re-render
-        if(prev !== userProfile.plan){
-          _lastPremiumState = null;
-          updateUserUI();
-          renderHoldings();
+        _lastPremiumState = null; // force re-evaluate เสมอ
+        updateUserUI();
+        // render AI ทันที ไม่รอ renderHoldings hook
+        if(isPremium()) {
+          const aiSec = document.getElementById('aiSection');
+          // render cards ถ้ายังไม่มี หรือ plan เพิ่งเปลี่ยนเป็น premium
+          if(!aiSec?.querySelector('.ai-card') || prev !== userProfile.plan) {
+            renderAICards();
+            if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+          }
+        } else if(userProfile !== null && prev !== userProfile.plan) {
+          renderLockedAI();
         }
+        renderHoldings();
       }
     }, (err)=>console.warn('profile snapshot:', err.message));
 
@@ -921,31 +929,14 @@ onAuthStateChanged(auth, async (user) => {
     // sync guest หลังจาก listeners พร้อมแล้ว (non-blocking)
     setTimeout(() => syncGuestToFirestore().catch(e=>console.warn('sync guest:', e.message)), 2000);
 
-    // render AI — retry จนกว่า profile จะโหลดครบ
-    const _tryRenderAI = async (attempt=0) => {
-      // reload profile จาก Firestore ทุกครั้ง (ไม่ใช้ cache)
-      try {
-        const snap = await getDoc(doc(db,'users',currentUser.uid,'profile','data'));
-        if(snap.exists()) {
-          userProfile = snap.data();
-          _lastPremiumState = null;
-        }
-      } catch(e) { console.warn('profile fetch attempt', attempt, e.message); }
-
-      if(isPremium()) {
-        renderAICards();
-        renderHoldings();
-        if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
-      } else if(attempt < 5) {
-        // retry สูงสุด 5 ครั้ง ห่างกัน 1 วินาที
-        setTimeout(() => _tryRenderAI(attempt+1), 1000);
-      } else {
-        // หมดความพยายาม — แสดง lock
-        console.warn('[AI] isPremium still false after 5 attempts');
-        renderLockedAI();
-      }
-    };
-    setTimeout(_tryRenderAI, 300);
+    // render AI — รอ onSnapshot profile trigger (ไม่ retry เอง)
+    // onSnapshot profile จะ set userProfile แล้ว call renderHoldings → hook จัดการ
+    // ถ้า profile โหลดใน parallel ไปแล้ว isPremium() จะ true ได้เลย
+    if(isPremium()) {
+      renderAICards();
+      if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+    }
+    // ถ้ายังไม่ premium ให้ onSnapshot profile จัดการ (ดูด้านล่าง)
   } else {
     // GUEST MODE: แสดงหน้าหลักทันที ไม่บังคับ login
     currentUser = null;
@@ -1008,7 +999,7 @@ function updateUserUI(){
   }
   else { badge.textContent='FREE'; badge.className='plan-badge plan-free'; }
   // render AI ใน updateUserUI เฉพาะถ้า profile พร้อม
-  // ไม่ทับ _tryRenderAI retry loop
+  // ไม่ทับ onSnapshot profile
   if(isPremium()){
     // ถ้ายังไม่มี ai cards ให้ render
     const aiSec = document.getElementById('aiSection');
@@ -2617,7 +2608,7 @@ window.renderHoldings = function(){
         renderAICards();
       } else {
         // render lock เฉพาะเมื่อ userProfile โหลดแล้ว (ไม่ทับ retry)
-        // ถ้า userProfile ยังไม่พร้อม ให้ _tryRenderAI จัดการแทน
+        // ถ้า userProfile ยังไม่พร้อม onSnapshot profile จะจัดการ
         if(userProfile !== null) renderLockedAI();
       }
     }
