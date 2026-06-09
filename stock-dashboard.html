@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="/stock-auto/icon-192.png">
 <!-- PWA -->
 <link rel="manifest" href="/stock-auto/manifest.json">
 <meta name="theme-color" content="#00d4aa">
@@ -1673,11 +1674,7 @@ async function callAI(key,prompt,maxTokens=700){
   return data.choices?.[0]?.message?.content||'';
 }
 function renderAICards(){
-  let grid=document.getElementById('aiGrid');
-  if(!grid) {
-    document.getElementById('aiSection').innerHTML = '<div class="ai-grid" id="aiGrid"></div><div style="margin-bottom:24px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;"><button class="btn btn-outline btn-sm" onclick="openAnalyzeSelector()">🤖 เลือกวิเคราะห์ (สูงสุด 5 ตัว)</button><span style="font-size:0.68rem;color:var(--text3);font-family:\'Space Mono\',monospace;">Bull + Bear + สรุป + แนวรับ/แนวต้าน</span></div>';
-    grid=document.getElementById('aiGrid');
-  }
+  const grid=document.getElementById('aiGrid');
   if(!grid) return;
   if(!holdings.length){ grid.innerHTML='<div style="color:var(--text3);font-size:0.78rem;font-family:\'Space Mono\',monospace;padding:16px;">เพิ่มหุ้นก่อนแล้ว AI จะวิเคราะห์ให้ครับ</div>'; return; }
   grid.innerHTML=holdings.map(h=>{
@@ -1794,12 +1791,7 @@ JSON array เท่านั้น:
   }catch(e){ if(grid) grid.innerHTML=`<div class="news-loading">⚠️ ${e.message}</div>`; }
 }
 function renderNews(){
-  let grid=document.getElementById('newsGrid');
-  if(!grid) {
-    document.getElementById('newsSection').innerHTML = '<div class="news-grid" id="newsGrid"></div>';
-    grid=document.getElementById('newsGrid');
-  }
-  if(!grid) return;
+  const grid=document.getElementById('newsGrid'); if(!grid) return;
   if(!newsCache.length){grid.innerHTML='<div class="news-loading">ไม่มีข่าว</div>';return;}
   grid.innerHTML=newsCache.map(n=>{
     const ic=n.impact==='POSITIVE'?'news-pos':n.impact==='NEGATIVE'?'news-neg':'news-neu';
@@ -2274,7 +2266,7 @@ function checkPriceAlerts(){
       const msg = `${a.ticker} ราคา $${p.current.toFixed(2)} ${a.type==='above'?'≥':'≤'} เป้าหมาย $${a.targetPrice}`;
       showToast(`🔔 ${msg}`);
       if('Notification' in window && Notification.permission === 'granted'){
-        new Notification('StockAI แจ้งเตือนราคา', { body: msg, icon: '/favicon.ico' });
+        new Notification('StockAI แจ้งเตือนราคา', { body: msg, icon: '/stock-auto/icon-192.png' });
       }
     }
   });
@@ -2606,32 +2598,19 @@ window.renderHoldings = function(){
       const atLimit = !isPremium() && holdings.length>=(currentUser?10:5);
       ctr.innerHTML = `<span style="color:${atLimit?'var(--red)':'var(--text3)'};">${holdings.length}/${max}</span> — คลิกแถวเพื่อดูกราฟ`;
     }
-   // render AI ตาม premium state — เช็คทุกครั้ง
-        const currentPremium = isPremium();
-        if(currentPremium !== _lastPremiumState){
-          _lastPremiumState = currentPremium;
-          if(currentPremium) {
-            // --- เพิ่มโค้ดส่วนนี้เพื่อสร้าง Container คืนมา ---
-            if(!document.getElementById('aiGrid')) {
-              document.getElementById('aiSection').innerHTML = `
-                <div class="ai-grid" id="aiGrid"></div>
-                <div style="margin-bottom:24px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                  <button class="btn btn-outline btn-sm" onclick="openAnalyzeSelector()">🤖 เลือกวิเคราะห์ (สูงสุด 5 ตัว)</button>
-                  <span style="font-size:0.68rem;color:var(--text3);font-family:'Space Mono',monospace;">Bull + Bear + สรุป + แนวรับ/แนวต้าน</span>
-                </div>
-              `;
-            }
-            if(!document.getElementById('newsGrid')) {
-              document.getElementById('newsSection').innerHTML = '<div class="news-grid" id="newsGrid"></div>';
-            }
-            // ---------------------------------------------
-            
-            renderAICards();
-            if(newsCache && newsCache.length > 0) renderNews();
-          } else {
-            renderLockedAI();
-          }
-        }
+    // render AI ตาม premium state — เช็คทุกครั้ง
+    const currentPremium = isPremium();
+    if(currentPremium !== _lastPremiumState){
+      _lastPremiumState = currentPremium;
+      if(currentPremium) {
+        renderAICards();
+        // ซ่อน lock screen ถ้ามี
+        const lockEl = document.getElementById('aiLockScreen');
+        if(lockEl) lockEl.style.display = 'none';
+      } else {
+        renderLockedAI();
+      }
+    }
   } catch(e) {
     console.warn('renderHoldings error:', e.message);
   } finally {
