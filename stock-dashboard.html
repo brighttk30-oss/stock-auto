@@ -885,11 +885,12 @@ onAuthStateChanged(auth, async (user) => {
         lastNewsTime = data.lastNewsTime||0;
         renderHoldings();
         if(userProfile && isPremium()){
-          renderAICards();
+          // มี AI cards อยู่แล้วหรือยัง?
+          const aiSec = document.getElementById('aiSection');
+          if(aiSec && !aiSec.querySelector('.ai-card')) renderAICards();
           if(newsCache.length) renderNews();
-        } else if(userProfile && !isPremium()) {
-          renderLockedAI();
         }
+        // ไม่ render lock ที่นี่ — ให้ _tryRenderAI จัดการ
       }
     }, (err)=>console.warn('onSnapshot error:', err.message));
 
@@ -1006,7 +1007,17 @@ function updateUserUI(){
     }
   }
   else { badge.textContent='FREE'; badge.className='plan-badge plan-free'; }
-  if(!isPremium()){ renderLockedAI(); }
+  // render AI ใน updateUserUI เฉพาะถ้า profile พร้อม
+  // ไม่ทับ _tryRenderAI retry loop
+  if(isPremium()){
+    // ถ้ายังไม่มี ai cards ให้ render
+    const aiSec = document.getElementById('aiSection');
+    if(aiSec && !aiSec.querySelector('.ai-card')) renderAICards();
+  } else if(userProfile !== null) {
+    // render lock เฉพาะเมื่อ profile โหลดแล้วและยืนยันว่าไม่ premium
+    const aiSec = document.getElementById('aiSection');
+    if(aiSec && !aiSec.querySelector('.ai-card')) renderLockedAI();
+  }
   // แสดง/ซ่อน แถบ 2 ตาม plan
   setTimeout(() => renderTicker2(), 100);
 }
@@ -2598,17 +2609,16 @@ window.renderHoldings = function(){
       const atLimit = !isPremium() && holdings.length>=(currentUser?10:5);
       ctr.innerHTML = `<span style="color:${atLimit?'var(--red)':'var(--text3)'};">${holdings.length}/${max}</span> — คลิกแถวเพื่อดูกราฟ`;
     }
-    // render AI ตาม premium state — เช็คทุกครั้ง
+    // render AI ตาม premium state
     const currentPremium = isPremium();
     if(currentPremium !== _lastPremiumState){
       _lastPremiumState = currentPremium;
       if(currentPremium) {
         renderAICards();
-        // ซ่อน lock screen ถ้ามี
-        const lockEl = document.getElementById('aiLockScreen');
-        if(lockEl) lockEl.style.display = 'none';
       } else {
-        renderLockedAI();
+        // render lock เฉพาะเมื่อ userProfile โหลดแล้ว (ไม่ทับ retry)
+        // ถ้า userProfile ยังไม่พร้อม ให้ _tryRenderAI จัดการแทน
+        if(userProfile !== null) renderLockedAI();
       }
     }
   } catch(e) {
