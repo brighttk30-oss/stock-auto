@@ -311,7 +311,8 @@ tr:hover td{background:rgba(0,212,170,0.03);}
 <div class="holdings-wrap" id="settingsPanel" style="display:none;margin-bottom:24px;">
   <div class="holdings-header"><h3>⚙ ตั้งค่า</h3><button class="btn btn-outline btn-sm" onclick="closeSettings()">ปิด</button></div>
   <div style="padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-    <div class="fg full"><label>OPENROUTER API KEY (Premium)</label><input type="password" id="orKeyInput" placeholder="sk-or-v1-..."></div>
+    <div class="fg full" style="display:none;"><label>OPENROUTER API KEY (Premium)</label><input type="password" id="orKeyInput" placeholder="sk-or-v1-..."></div>
+    <div class="fg full"><div style="background:rgba(0,212,170,0.08);border:1px solid rgba(0,212,170,0.25);border-radius:8px;padding:10px 14px;font-size:0.75rem;color:var(--accent);">✅ AI พร้อมใช้งาน — OpenRouter เชื่อมต่อแล้ว</div></div>
     <div class="fg"><label>เวลาวิเคราะห์เช้า</label><input type="time" id="morningTime" value="08:00"></div>
     <div class="fg"><label>เวลาวิเคราะห์เย็น</label><input type="time" id="eveningTime" value="21:00"></div>
     <!-- LINE NOTIFY -->
@@ -611,8 +612,11 @@ import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, collectionGr
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 const FB_CFG={apiKey:"AIzaSyAb073KKqOV5aYP_S57JTvOUOCUWvr2Ebo",authDomain:"stock-web-c2068.firebaseapp.com",projectId:"stock-web-c2068",storageBucket:"stock-web-c2068.firebasestorage.app",messagingSenderId:"4202725865",appId:"1:4202725865:web:180682bc845693d92c0b78"};
-const ADMIN_EMAIL = 'brighttk30@gmail.com'; // เปลี่ยนเป็น email admin จริง
+const ADMIN_EMAIL = 'brighttk30@gmail.com';
 const TD_KEY = '5e8d9f5961fe44a19469c848bc360bb2';
+// OpenRouter Key — ใช้เฉพาะ Premium เท่านั้น (เช็ค isPremium() ก่อนทุกครั้ง)
+const OR_KEY = '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';
+// OpenRouter Key — ใช้ได้เฉพาะ Premium เท่านั้น
 
 const app = initializeApp(FB_CFG);
 const db = getFirestore(app);
@@ -649,7 +653,10 @@ function isPremium(){
   return (plan === 'premium' || plan === 'trial') && expiry > Date.now();
 }
 function isAdmin(){ return currentUser?.email === ADMIN_EMAIL || userProfile?.isAdmin === true; }
-function getKey(){ return localStorage.getItem('or_key_'+currentUser?.uid)||''; }
+function getKey(){
+  // OR_KEY hardcode แล้ว ใช้ได้เลยสำหรับ Premium
+  return OR_KEY || localStorage.getItem('or_key_'+(currentUser?.uid||'')) || '';
+}
 function saveKey(k){ localStorage.setItem('or_key_'+currentUser?.uid, k); }
 function getSchedule(){ return{morning:localStorage.getItem('morning_time')||'08:00',evening:localStorage.getItem('evening_time')||'21:00'}; }
 
@@ -715,27 +722,39 @@ window.doRegister = async () => {
 };
 
 window.doGoogleLogin = async () => {
-  try{
-    // Try popup first, fallback to redirect
+  // detect iOS/Safari — ใช้ redirect ทันที เพราะ popup ถูกบล็อก
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  const useRedirect = isIOS || isSafari;
+
+  if(useRedirect) {
+    try {
+      await signInWithRedirect(auth, googleProvider);
+    } catch(e) {
+      showAuthError('Google login ล้มเหลว: ' + e.message);
+    }
+    return;
+  }
+
+  // Desktop: ลอง popup ก่อน
+  try {
     const result = await signInWithPopup(auth, googleProvider);
     const profRef = doc(db,'users',result.user.uid,'profile','data');
     const snap = await getDoc(profRef);
     if(!snap.exists()){
       const trialExpiry = Date.now() + 9*24*60*60*1000;
-      const gProfile = {
+      await setDoc(doc(db,'users',result.user.uid), { email:result.user.email||'', name:result.user.displayName||'', createdAt:Date.now() });
+      await setDoc(profRef, {
         name:result.user.displayName||'', email:result.user.email||'',
         plan:'trial', planExpiry:trialExpiry,
         createdAt:Date.now(), isAdmin:false
-      };
-      await setDoc(doc(db,'users',result.user.uid), { email:result.user.email||'', name:result.user.displayName||'', createdAt:Date.now() });
-      await setDoc(profRef, gProfile);
+      });
     }
-  }catch(e){
-    if(e.code==='auth/popup-blocked'||e.code==='auth/popup-closed-by-user'){
-      // Fallback to redirect
+  } catch(e) {
+    if(e.code==='auth/popup-blocked'||e.code==='auth/popup-closed-by-user'||e.code==='auth/cancelled-popup-request'){
       await signInWithRedirect(auth, googleProvider);
     } else {
-      showAuthError('Google login ล้มเหลว: '+e.message);
+      showAuthError('Google login ล้มเหลว: ' + e.message);
     }
   }
 };
@@ -1701,7 +1720,7 @@ window.openAnalyzeSelector = () => {
   if(!currentUser){ openModal('upgradeModal'); return; }
   if(!isPremium()){ openModal('upgradeModal'); return; }
   if(!holdings.length){ showToast('เพิ่มหุ้นก่อน',true); return; }
-  if(!getKey()){ showToast('ใส่ OpenRouter Key ก่อน ⚙',true); openSettings(); return; }
+  // OR_KEY hardcode แล้ว ไม่ต้องเช็ค
   const modal = document.getElementById('analyzeSelectorModal');
   const list = document.getElementById('analyzeSelectorList');
   list.innerHTML = holdings.map(h=>`
@@ -1803,6 +1822,11 @@ const TICKER_WATCHLIST = [
 
 let tickerPrices = {};
 let tickerTimer = null;
+// Firestore ticker cache state (ต้องเป็น global เพราะ onSnapshot ใช้)
+let _firestoreTickerLoaded = false;
+let _firestoreTickerTime = 0;
+const FIRESTORE_TICKER_TTL = 25 * 60 * 1000; // 25 นาที
+const _tickerCache = {}, _tickerCacheTime = {};
 // ── TICKER QUOTA GUARD ──
 // เก็บ state quota หมด ป้องกันการยิง request ต่อเมื่อ 429
 let _tickerQuotaExhausted = false;
@@ -1836,7 +1860,6 @@ function markQuotaExhausted() {
   }
 }
 
-const _tickerCache = {}, _tickerCacheTime = {};
 const TICKER_TTL = 30 * 60 * 1000; // cache 30 นาที (ลดจาก 15 เพื่อประหยัด quota)
 
 // Ticker prices อ่านจาก Firestore onSnapshot ใน startTickerUpdates
