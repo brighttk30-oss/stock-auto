@@ -920,30 +920,31 @@ onAuthStateChanged(auth, async (user) => {
     // sync guest หลังจาก listeners พร้อมแล้ว (non-blocking)
     setTimeout(() => syncGuestToFirestore().catch(e=>console.warn('sync guest:', e.message)), 2000);
 
-    // render AI หลัง listeners พร้อม — ให้ userProfile โหลดครบก่อน
-    // delay 500ms เผื่อ profile snapshot trigger ก่อน
-    setTimeout(() => {
-      _lastPremiumState = null; // force re-evaluate
-      if(isPremium()){
+    // render AI — retry จนกว่า profile จะโหลดครบ
+    const _tryRenderAI = async (attempt=0) => {
+      // reload profile จาก Firestore ทุกครั้ง (ไม่ใช้ cache)
+      try {
+        const snap = await getDoc(doc(db,'users',currentUser.uid,'profile','data'));
+        if(snap.exists()) {
+          userProfile = snap.data();
+          _lastPremiumState = null;
+        }
+      } catch(e) { console.warn('profile fetch attempt', attempt, e.message); }
+
+      if(isPremium()) {
         renderAICards();
+        renderHoldings();
         if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+      } else if(attempt < 5) {
+        // retry สูงสุด 5 ครั้ง ห่างกัน 1 วินาที
+        setTimeout(() => _tryRenderAI(attempt+1), 1000);
       } else {
-        // reload profile อีกครั้งเผื่อ Firestore ยังไม่ส่งมา
-        getDoc(doc(db,'users',currentUser.uid,'profile','data')).then(snap=>{
-          if(snap.exists()){
-            userProfile = snap.data();
-            _lastPremiumState = null;
-            if(isPremium()){
-              renderAICards();
-              if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
-              renderHoldings(); // force re-render to hide lock
-            } else {
-              renderLockedAI();
-            }
-          }
-        }).catch(()=>renderLockedAI());
+        // หมดความพยายาม — แสดง lock
+        console.warn('[AI] isPremium still false after 5 attempts');
+        renderLockedAI();
       }
-    }, 500);
+    };
+    setTimeout(_tryRenderAI, 300);
   } else {
     // GUEST MODE: แสดงหน้าหลักทันที ไม่บังคับ login
     currentUser = null;
