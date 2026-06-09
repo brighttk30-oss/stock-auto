@@ -2044,9 +2044,9 @@ function startTickerUpdates() {
       console.log(`[Ticker] ✅ Firestore ${count} prices (${data.thaiTime||''})`);
     },
     (err) => {
-      // error → โหลด 1 ครั้งเป็น fallback ไม่ยิง API loop
+      // error → แสดง warning เท่านั้น ไม่ยิง API
       console.warn('[Ticker] onSnapshot error:', err.message);
-      loadTickerFromFirestore().then(()=>renderTicker1());
+      renderTicker1(); // render ด้วย cache ที่มีอยู่
     }
   );
 }
