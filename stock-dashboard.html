@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-<link rel="icon" type="image/png" href="/stock-auto/icon-192.png">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <!-- PWA -->
@@ -927,7 +926,8 @@ onAuthStateChanged(auth, async (user) => {
       _lastPremiumState = null; // force re-evaluate
       if(isPremium()){
         renderAICards();
-        if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+        if(window.renderNews) window.renderNews(); else if(typeof renderNews !== 'undefined') renderNews();
+        if(lastNewsTime>0 && newsCache.length){ startNewsCountdown(); }
       } else {
         // reload profile อีกครั้งเผื่อ Firestore ยังไม่ส่งมา
         getDoc(doc(db,'users',currentUser.uid,'profile','data')).then(snap=>{
@@ -936,7 +936,8 @@ onAuthStateChanged(auth, async (user) => {
             _lastPremiumState = null;
             if(isPremium()){
               renderAICards();
-              if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
+              if(window.renderNews) window.renderNews(); else if(typeof renderNews !== 'undefined') renderNews();
+              if(lastNewsTime>0 && newsCache.length){ startNewsCountdown(); }
               renderHoldings(); // force re-render to hide lock
             } else {
               renderLockedAI();
@@ -1809,7 +1810,7 @@ window.renderNews = function() {
   if(!section) return;
   
   if(!newsCache || !newsCache.length){
-    section.innerHTML='<div class="news-grid" id="newsGrid"><div class="news-loading">ไม่มีข่าว</div></div>';
+    section.innerHTML='<div class="news-grid" id="newsGrid"><div class="news-loading">กด "🤖 เลือกวิเคราะห์" และวิเคราะห์ เพื่อโหลดข่าว</div></div>';
     return;
   }
   
@@ -2288,7 +2289,7 @@ function checkPriceAlerts(){
       const msg = `${a.ticker} ราคา $${p.current.toFixed(2)} ${a.type==='above'?'≥':'≤'} เป้าหมาย $${a.targetPrice}`;
       showToast(`🔔 ${msg}`);
       if('Notification' in window && Notification.permission === 'granted'){
-        new Notification('StockAI แจ้งเตือนราคา', { body: msg, icon: '/stock-auto/icon-192.png' });
+        new Notification('StockAI แจ้งเตือนราคา', { body: msg, icon: '/favicon.ico' });
       }
     }
   });
