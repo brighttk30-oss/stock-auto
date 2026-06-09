@@ -899,20 +899,20 @@ onAuthStateChanged(auth, async (user) => {
       if(snap.exists()){
         const prev = userProfile?.plan;
         userProfile = snap.data();
-        _lastPremiumState = null; // force re-evaluate เสมอ
         updateUserUI();
-        // render AI ทันที ไม่รอ renderHoldings hook
+        // render AI ทันที — ไม่ reset _lastPremiumState เพราะ hook จะ re-render ทับ
         if(isPremium()) {
           const aiSec = document.getElementById('aiSection');
-          // render cards ถ้ายังไม่มี หรือ plan เพิ่งเปลี่ยนเป็น premium
-          if(!aiSec?.querySelector('.ai-card') || prev !== userProfile.plan) {
+          if(!aiSec?.querySelector('.ai-card')) {
+            _lastPremiumState = null; // reset เฉพาะตอน render ครั้งแรก
             renderAICards();
             if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
           }
-        } else if(userProfile !== null && prev !== userProfile.plan) {
-          renderLockedAI();
+        } else {
+          // ไม่ premium — render lock เฉพาะถ้ายังไม่มี cards
+          const aiSec = document.getElementById('aiSection');
+          if(!aiSec?.querySelector('.ai-card')) renderLockedAI();
         }
-        renderHoldings();
       }
     }, (err)=>console.warn('profile snapshot:', err.message));
 
@@ -2347,6 +2347,9 @@ function showGuestSaveBanner(){
   t.className = 'toast show';
   setTimeout(()=>{ t.classList.remove('show'); t.innerHTML=''; }, 5000);
 }
+
+// ── UTILITIES ──
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── TOAST NOTIFICATION ──
 function showToast(msg, isError=false, duration=3000){
