@@ -644,13 +644,15 @@ let newsCountdown = null;
 let dbUnsubscribe = null;
 
 function getExpiry(profile){
-  // รองรับ Firestore Timestamp object และ plain number
   const exp = profile?.planExpiry;
+  console.log('[getExpiry] raw:', JSON.stringify(exp), 'type:', typeof exp);
   if(!exp) return 0;
   if(typeof exp === 'number') return exp;
   if(typeof exp === 'object' && exp.toDate) return exp.toDate().getTime();
   if(typeof exp === 'object' && exp.seconds) return exp.seconds * 1000;
-  return Number(exp) || 0;
+  const n = Number(exp);
+  console.log('[getExpiry] Number(exp):', n);
+  return n || 0;
 }
 function isPremium(){
   if(!userProfile) { console.warn('[isPremium] userProfile=null'); return false; }
