@@ -1,10 +1,10 @@
 // ── StockAI Service Worker ──
-const CACHE_VERSION = 'stockai-v4';
+const CACHE_VERSION = 'stockai-v5';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const DYNAMIC_CACHE = `${CACHE_VERSION}-dynamic`;
 
 const STATIC_ASSETS = [
-  '/stock-auto/stock-dashboard.html',
+  // HTML ไม่ cache เพื่อให้ได้ไฟล์ใหม่เสมอ
   '/stock-auto/manifest.json',
   '/stock-auto/icon-192.png',
   '/stock-auto/icon-512.png',
