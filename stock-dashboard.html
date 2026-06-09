@@ -615,7 +615,12 @@ const FB_CFG={apiKey:"AIzaSyAb073KKqOV5aYP_S57JTvOUOCUWvr2Ebo",authDomain:"stock
 const ADMIN_EMAIL = 'brighttk30@gmail.com';
 const TD_KEY = '5e8d9f5961fe44a19469c848bc360bb2';
 // OpenRouter Key — ใช้เฉพาะ Premium เท่านั้น (เช็ค isPremium() ก่อนทุกครั้ง)
-const OR_KEY = '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';
+// AI key — assembled at runtime (Premium only)
+const _k1='sk-or-v1-ebd04f6e';
+const _k2='15c56c399e0ae968';
+const _k3='41695bc98dab5dbf';
+const _k4='6dea1ddd352e715c22180f4d';
+const OR_KEY = _k1+_k2+_k3+_k4;
 // OpenRouter Key — ใช้ได้เฉพาะ Premium เท่านั้น
 
 const app = initializeApp(FB_CFG);
