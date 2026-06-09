@@ -645,22 +645,17 @@ let dbUnsubscribe = null;
 
 function getExpiry(profile){
   const exp = profile?.planExpiry;
-  console.log('[getExpiry] raw:', JSON.stringify(exp), 'type:', typeof exp);
   if(!exp) return 0;
   if(typeof exp === 'number') return exp;
   if(typeof exp === 'object' && exp.toDate) return exp.toDate().getTime();
   if(typeof exp === 'object' && exp.seconds) return exp.seconds * 1000;
-  const n = Number(exp);
-  console.log('[getExpiry] Number(exp):', n);
-  return n || 0;
+  return Number(exp) || 0;
 }
 function isPremium(){
-  if(!userProfile) { console.warn('[isPremium] userProfile=null'); return false; }
+  if(!userProfile) return false;
   const plan = userProfile.plan;
   const expiry = getExpiry(userProfile);
-  const result = (plan === 'premium' || plan === 'trial') && expiry > Date.now();
-  console.log('[isPremium]', {plan, expiry, now: Date.now(), result});
-  return result;
+  return (plan === 'premium' || plan === 'trial') && expiry > Date.now();
 }
 function isAdmin(){ return currentUser?.email === ADMIN_EMAIL || userProfile?.isAdmin === true; }
 function getKey(){
@@ -898,26 +893,13 @@ onAuthStateChanged(auth, async (user) => {
       }
     }, (err)=>console.warn('onSnapshot error:', err.message));
 
-    // subscribe profile — render AI ทันทีที่ได้ข้อมูล
+    // subscribe profile — render AI ทันทีที่ Firestore ส่งข้อมูลมา
     onSnapshot(doc(db,'users',user.uid,'profile','data'), (snap)=>{
-      if(snap.exists()){
-        const prev = userProfile?.plan;
-        userProfile = snap.data();
-        updateUserUI();
-        // render AI ทันที — ไม่ reset _lastPremiumState เพราะ hook จะ re-render ทับ
-        if(isPremium()) {
-          const aiSec = document.getElementById('aiSection');
-          if(!aiSec?.querySelector('.ai-card')) {
-            _lastPremiumState = null; // reset เฉพาะตอน render ครั้งแรก
-            renderAICards();
-            if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
-          }
-        } else {
-          // ไม่ premium — render lock เฉพาะถ้ายังไม่มี cards
-          const aiSec = document.getElementById('aiSection');
-          if(!aiSec?.querySelector('.ai-card')) renderLockedAI();
-        }
-      }
+      if(!snap.exists()) return;
+      userProfile = snap.data();
+      _lastPremiumState = null;
+      updateUserUI();
+      renderHoldings(); // จะ trigger hook render AI/lock ตาม isPremium()
     }, (err)=>console.warn('profile snapshot:', err.message));
 
     // fetch FX ก่อน + รอ portfolioListener ดึงราคาจาก Firestore
@@ -933,14 +915,7 @@ onAuthStateChanged(auth, async (user) => {
     // sync guest หลังจาก listeners พร้อมแล้ว (non-blocking)
     setTimeout(() => syncGuestToFirestore().catch(e=>console.warn('sync guest:', e.message)), 2000);
 
-    // render AI — รอ onSnapshot profile trigger (ไม่ retry เอง)
-    // onSnapshot profile จะ set userProfile แล้ว call renderHoldings → hook จัดการ
-    // ถ้า profile โหลดใน parallel ไปแล้ว isPremium() จะ true ได้เลย
-    if(isPremium()) {
-      renderAICards();
-      if(lastNewsTime>0 && newsCache.length){ renderNews(); startNewsCountdown(); }
-    }
-    // ถ้ายังไม่ premium ให้ onSnapshot profile จัดการ (ดูด้านล่าง)
+    // onSnapshot profile trigger renderHoldings → hook render AI อัตโนมัติ
   } else {
     // GUEST MODE: แสดงหน้าหลักทันที ไม่บังคับ login
     currentUser = null;
@@ -1002,17 +977,7 @@ function updateUserUI(){
     }
   }
   else { badge.textContent='FREE'; badge.className='plan-badge plan-free'; }
-  // render AI ใน updateUserUI เฉพาะถ้า profile พร้อม
-  // ไม่ทับ onSnapshot profile
-  if(isPremium()){
-    // ถ้ายังไม่มี ai cards ให้ render
-    const aiSec = document.getElementById('aiSection');
-    if(aiSec && !aiSec.querySelector('.ai-card')) renderAICards();
-  } else if(userProfile !== null) {
-    // render lock เฉพาะเมื่อ profile โหลดแล้วและยืนยันว่าไม่ premium
-    const aiSec = document.getElementById('aiSection');
-    if(aiSec && !aiSec.querySelector('.ai-card')) renderLockedAI();
-  }
+  // AI rendering ทำใน hook ของ renderHoldings เท่านั้น
   // แสดง/ซ่อน แถบ 2 ตาม plan
   setTimeout(() => renderTicker2(), 100);
 }
@@ -2607,16 +2572,15 @@ window.renderHoldings = function(){
       const atLimit = !isPremium() && holdings.length>=(currentUser?10:5);
       ctr.innerHTML = `<span style="color:${atLimit?'var(--red)':'var(--text3)'};">${holdings.length}/${max}</span> — คลิกแถวเพื่อดูกราฟ`;
     }
-    // render AI ตาม premium state
+    // render AI — simple hook
     const currentPremium = isPremium();
     if(currentPremium !== _lastPremiumState){
       _lastPremiumState = currentPremium;
-      if(currentPremium) {
+      if(currentPremium){
         renderAICards();
-      } else {
-        // render lock เฉพาะเมื่อ userProfile โหลดแล้ว (ไม่ทับ retry)
-        // ถ้า userProfile ยังไม่พร้อม onSnapshot profile จะจัดการ
-        if(userProfile !== null) renderLockedAI();
+        if(newsCache.length) renderNews();
+      } else if(userProfile !== null){
+        renderLockedAI();
       }
     }
   } catch(e) {
