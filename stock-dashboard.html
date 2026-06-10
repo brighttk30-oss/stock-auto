@@ -987,14 +987,19 @@ function showTrialWarning(daysLeft){
 }
 
 function renderLockedAI(){
-  if(isPremium()) return; // ป้องกัน render lock ทับ AI cards
-  document.getElementById('aiSection').innerHTML = `
+  if(isPremium()) return; // guard — ห้าม render lock ถ้า premium
+  // ใช้ teaser ถ้ามีหุ้น, ใช้ full lock ถ้าไม่มี
+  if(holdings && holdings.length > 0 && typeof renderTeaserAI === 'function') {
+    renderTeaserAI();
+  } else {
+    document.getElementById('aiSection').innerHTML = `
     <div class="premium-lock">
       <div class="lock-icon">🔒</div>
       <div class="lock-title">PREMIUM FEATURE</div>
       <div class="lock-desc">AI วิเคราะห์ Bull/Bear/สรุป, แนวรับ/แนวต้าน<br>และข่าวล่าสุดพร้อมผลกระทบ<br>พร้อมให้บริการสำหรับสมาชิก Premium</div>
       <button class="btn btn-gold" onclick="openModal('upgradeModal')">⭐ อัปเกรดเป็น Premium — ฿99/เดือน</button>
     </div>`;
+  }
   document.getElementById('newsSection').innerHTML = `
     <div class="premium-lock">
       <div class="lock-icon">📰</div>
@@ -1003,6 +1008,7 @@ function renderLockedAI(){
       <button class="btn btn-gold" onclick="openModal('upgradeModal')">⭐ อัปเกรดเป็น Premium</button>
     </div>`;
 }
+
 
 // ── FIRESTORE USER DATA ──
 // initUserData ยังคงไว้สำหรับ backward compat
@@ -2630,27 +2636,7 @@ function renderTeaserAI(){
   aiSection.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;">${teaserHTML}</div>`;
 }
 
-// renderLockedAI — ใช้ teaser ถ้ามีหุ้น
-window.renderLockedAI = function(){
-  if(isPremium()) return;
-  if(holdings.length > 0) renderTeaserAI();
-  else {
-    document.getElementById('aiSection').innerHTML = `
-      <div class="premium-lock">
-        <div class="lock-icon">🔒</div>
-        <div class="lock-title">PREMIUM FEATURE</div>
-        <div class="lock-desc">AI วิเคราะห์ Bull/Bear/สรุป, แนวรับ/แนวต้าน<br>เพิ่มหุ้นก่อนเพื่อดู preview</div>
-        <button class="btn btn-gold" onclick="openModal('upgradeModal')">⭐ ลองฟรี 9 วัน</button>
-      </div>`;
-  }
-  document.getElementById('newsSection').innerHTML = `
-    <div class="premium-lock">
-      <div class="lock-icon">📰</div>
-      <div class="lock-title">ข่าวล่าสุด — PREMIUM</div>
-      <div class="lock-desc">ดูข่าวพร้อมการวิเคราะห์ผลกระทบต่อราคาหุ้น</div>
-      <button class="btn btn-gold" onclick="openModal('upgradeModal')">⭐ ลองฟรี 9 วัน</button>
-    </div>`;
-};
+// renderLockedAI unified above
 
 // ══════════════════════════════════════════════════
 // INIT
