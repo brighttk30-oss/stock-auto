@@ -940,8 +940,7 @@ function updateUserUI(){
   if(guestBanner) guestBanner.remove();
   const guestBtn = document.getElementById('guestLoginBtn');
   if(guestBtn) guestBtn.remove();
-  // reset premium state tracker ให้ hook render AI ใหม่
-  if(typeof _lastPremiumState !== 'undefined') _lastPremiumState = null;
+  // ไม่ reset _lastPremiumState ที่นี่ — ให้ onSnapshot profile จัดการ
   const name = userProfile?.name || currentUser?.displayName || currentUser?.email || 'User';
   const initial = name.charAt(0).toUpperCase();
   document.getElementById('userAvatar').textContent = initial;
