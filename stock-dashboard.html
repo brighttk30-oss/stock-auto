@@ -940,7 +940,8 @@ function updateUserUI(){
   if(guestBanner) guestBanner.remove();
   const guestBtn = document.getElementById('guestLoginBtn');
   if(guestBtn) guestBtn.remove();
-  // ไม่ reset _lastPremiumState ที่นี่ — ให้ onSnapshot profile จัดการ
+  // reset premium state tracker ให้ hook render AI ใหม่
+  // _lastPremiumState ไม่ reset ที่นี่
   const name = userProfile?.name || currentUser?.displayName || currentUser?.email || 'User';
   const initial = name.charAt(0).toUpperCase();
   document.getElementById('userAvatar').textContent = initial;
@@ -2689,12 +2690,16 @@ window.showErrorBanner = (msg) => {
   banner.innerHTML = `⚠️ ${msg} <button onclick="document.getElementById('errorBanner').remove()" style="background:none;border:none;cursor:pointer;color:var(--red);font-size:1rem;margin-left:8px;">✕</button>`;
 };
 
-// ── PWA Service Worker ──
+// ── PWA Service Worker — unregister เก่าก่อนเสมอ ──
 if('serviceWorker' in navigator){
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/stock-auto/sw.js')
-      .then(reg => console.log('SW registered:', reg.scope))
-      .catch(e => console.warn('SW error:', e));
+    navigator.serviceWorker.getRegistrations().then(regs => {
+      Promise.all(regs.map(r => r.unregister())).then(() => {
+        navigator.serviceWorker.register('/stock-auto/sw.js')
+          .then(reg => console.log('SW registered:', reg.scope))
+          .catch(e => console.warn('SW error:', e));
+      });
+    });
   });
 }
 
